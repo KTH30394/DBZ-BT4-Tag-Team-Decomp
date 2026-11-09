@@ -113,6 +113,11 @@ s32 Bt4_CharaFromModelFile(s32 id) {
 /* File id of a character's model: costume n, or its damaged version. */
 s32 ChrView_GetModelFile(s32 chara, s32 costume, s32 damaged) {
 #ifdef PORT
+    {
+        /* PC build: a fighter listed in damaged.txt always wears its damaged model (port/src/plat_stages.c) */
+        extern int Port_ForceDamaged(int chara, int costume, int variant);
+        damaged = Port_ForceDamaged(chara, costume, damaged);
+    }
     if (gPortVariant != 0) {
         return Bt4_ModelFile(chara, costume, damaged != 0);
     }

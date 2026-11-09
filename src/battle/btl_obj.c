@@ -531,6 +531,11 @@ s32 BtlObj_RequestCharaModel(s32 side, s32 chara, s32 costume, s32 variant) {
     s32 model;
 
 #ifdef PORT
+    {
+        /* PC build: a fighter listed in damaged.txt always wears its damaged model (port/src/plat_stages.c) */
+        extern int Port_ForceDamaged(int chara, int costume, int variant);
+        variant = Port_ForceDamaged(chara, costume, variant);
+    }
     if (gPortVariant != 0) {
         /* the mod: SLUS_219.78 at 0x249C60 */
         return BtlRes_Request(side < 2, Bt4_ModelFile(chara, costume, variant), 0x141E + chara, 0x1518 + chara);

@@ -290,6 +290,8 @@ static uint64_t gpu_now(void) {
     return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
 }
 
+#define ANIME_FORMS 8 /* forms of one fighter sharing a texture, each with its anime colours (gs_texpack.h) */
+
 /* GS memory -> an RGBA texture, cached by TEX0 / TEXA and the content of the pages it occupies. */
 typedef struct Tex {
     uint64_t tex0, texa;
@@ -306,6 +308,21 @@ typedef struct Tex {
     int pack;                /* a texture pack's replacement still being read (gs_texpack.c), or -1 */
     uint32_t packAlpha;      /* and the amax it will have */
     float avg[3];            /* its average colour, weighted by alpha, 0..1 (an energy light's colour is in its texture) */
+    GsTex anime[ANIME_FORMS];   /* its anime colours from the texture pack (TexPack_LoadAnime), one a form of the fighter */
+    float animeCut[ANIME_FORMS]; /* and how far each one's edge moves towards the shadow side (anime_cut.txt) */
+    int animeTones[ANIME_FORMS]; /* and 2, or 3 with a middle tone (TexPack_AnimeMid) */
+    int animeEntry[ANIME_FORMS]; /* (the pack's entries: TexPack_AnimeRamps) */
+    int animeCount;
+    int arow;                /* a fighter's texture: the row of the alpha table its palette has (BtlObjMdl_InitAlphaSlots
+                                writes slot + row * 15 into its alpha: each fighter on the screen its own row); -1 = none */
+    uint64_t markForms;      /* the form folders this texture marks (TexPack_AnimeFoldersMarking), a bit each */
+    uint32_t rampHash;       /* a shading ramp: its colours as they are, a little rounded */
+    int rampFlat;            /* and all one tone (an outline shell's): no anime pass over it */
+    uint32_t packName;       /* (BT3_ANIME_LOG) the first 8 digits of its texture pack name, 0 = not looked up */
+    float toonEdge, toonDir; /* a shading ramp redrawn (toon_sharpen): where its edge is (0..1 along it), and 1 if the lit
+                                side is past the edge, -1 if before it; 0 = not one */
+    int toonWhy;             /* (BT3_ANIME_LOG) asked for as a ramp: 1 redrawn; not: 2 shading off, 3 a pack's, 4 taken as
+                                text, 5 no pixels; 0 = not asked for as one */
 } Tex;
 static Tex sTex[MAX_TEX];
 static uint16_t sTexBucket[TEX_BUCKETS]; /* index + 1 of a cache entry, 0 = empty (open addressing) */
@@ -380,20 +397,24 @@ static void light_add(float x0, float y0, float x1, float y1, float z, float r, 
 }
 
 /* The ramp `px` (w x h, GS RGBA) redrawn at `sharp` (1..100) into a new picture 256 wide: *ow, *oh. NULL: left as
-   it is. */
-static uint32_t *toon_sharpen(const uint32_t *px, uint32_t w, uint32_t h, int sharp, uint32_t *ow, uint32_t *oh) {
+   it is. `cut` (0..100, bt3.look): the edge moved towards the dark end, by up to a third of the ramp. *edge, *dir:
+   where the edge of its first row came out (0..1) and on which side of it the light is (Tex.toonEdge). */
+static uint32_t *toon_sharpen(const uint32_t *px, uint32_t w, uint32_t h, int sharp, int cut, uint32_t *ow, uint32_t *oh,
+                              float *edge, float *dir) {
     static const float kCool[3] = {0.84f, 0.84f, 1.10f};
     const uint32_t W = w < 256 ? 256 : w;
     uint32_t *out = (uint32_t *)malloc((size_t)W * h * 4), x, y;
     const float k = sharp / 100.0f;
+    *edge = 0.5f;
+    *dir = 0.0f;
     if (out == NULL) {
         return NULL;
     }
     for (y = 0; y < h; y++) {
         const uint8_t *row = (const uint8_t *)(px + (size_t)y * w);
-        float lmin = 1e9f, lmax = -1e9f, lit[3], shade[3], ll, sl;
+        float lmin = 1e9f, lmax = -1e9f, lit[3], shade[3], ll, sl, eLast = 0.0f;
         uint32_t imin = 0, imax = 0;
-        int ch;
+        int ch, edgeSeen = 0;
         for (x = 0; x < w; x++) {
             const uint8_t *c = row + x * 4;
             float l = c[0] * 0.3f + c[1] * 0.59f + c[2] * 0.11f;
@@ -407,9 +428,12 @@ static uint32_t *toon_sharpen(const uint32_t *px, uint32_t w, uint32_t h, int sh
         }
         ll = (lit[0] + lit[1] + lit[2]) / 3.0f;
         sl = (shade[0] + shade[1] + shade[2]) / 3.0f;
+        if (y == 0) {
+            *dir = imax >= imin ? 1.0f : -1.0f;
+        }
         for (x = 0; x < W; x++) {
-            /* the original at this point of the wider ramp, linearly */
-            float sx = ((float)x + 0.5f) * w / W - 0.5f, f, l, t, e;
+            /* the original at this point of the wider ramp, linearly (moved towards the lit end by `cut`) */
+            float sx = ((float)x + 0.5f) * w / W - 0.5f + (imax >= imin ? 1.0f : -1.0f) * cut / 300.0f * (float)w, f, l, t, e;
             int x0 = (int)floorf(sx), x1 = x0 + 1;
             uint8_t o[4], *dst = (uint8_t *)(out + (size_t)y * W + x);
             f = sx - (float)x0;
@@ -422,6 +446,11 @@ static uint32_t *toon_sharpen(const uint32_t *px, uint32_t w, uint32_t h, int sh
             t = lmax - lmin > 4.0f ? (l - lmin) / (lmax - lmin) : 0.5f;
             e = t < 0.36f ? 0.0f : t > 0.6f ? 1.0f : (t - 0.36f) / 0.24f; /* (the soft edge) */
             e = e * e * (3.0f - 2.0f * e);
+            if (y == 0 && x > 0 && (e >= 0.5f) != (eLast >= 0.5f) && !edgeSeen) {
+                *edge = (float)x / (float)W;
+                edgeSeen = 1;
+            }
+            eLast = e;
             for (ch = 0; ch < 3; ch++) {
                 float b = ll + (lit[ch] - ll) * 1.12f;                 /* (lit: a little more saturated) */
                 float a = (sl + (shade[ch] - sl) * 1.15f) * kCool[ch]; /* (shadow: saturated, cooler) */
@@ -870,6 +899,7 @@ static void pack_arrived(Tex *c) {
     gGpuTexReplaced++;
 }
 
+
 static void menu_hd_arrived(Tex *c) {
     static struct { GsTex tex; unsigned frame; } old[256];
     static unsigned head, tail;
@@ -890,6 +920,839 @@ static void menu_hd_arrived(Tex *c) {
     old[head & 255].tex = c->tex; old[head++ & 255].frame = gGsFrame;
     c->tex = tex; c->rw = w; c->rh = h; c->replaced = 4; c->hdPending = 0;
     sTextureBytes-=c->bytes;c->bytes=(uint64_t)w*h*4;sTextureBytes+=c->bytes;
+}
+
+/* The anime colours of a texture (TexPack_LoadAnime) as a texture of the back end, 0 = none. The original's pixels are
+   kept for each (sAnimeOrig): the game repaints a fighter's palettes for a moment (hit, a charged attack: the whole
+   model whiter), which is a texture of its own without anime colours of its own; `other` = this is one of those, found
+   under another palette (TexPack_AnimeFind, *other). It gets the original's anime colours with what the repaint adds
+   to each texel added to them, so the flash is still seen; only where the repaint is lighter than the original nearly
+   everywhere (another fighter's colours on the same texture are not a flash). */
+static struct { int id; uint32_t w, h; uint32_t *px; } sAnimeOrig[64];
+static unsigned sAnimeOrigNext;
+
+/* An anime file, read once (the repaints come every frame while a flash lasts: read each time, the game crawled).
+   1 = *img and *cut are its own (kept here: not to be let go). */
+static int anime_held(int id, TexPackImage *img, int *cut) {
+    static struct { int id, cut; TexPackImage img; } held[64];
+    static unsigned next;
+    int k, found = -1;
+    for (k = 0; k < 64; k++) {
+        if (held[k].img.file != NULL && held[k].id == id) {
+            found = k;
+            break;
+        }
+    }
+    if (found < 0) {
+        found = (int)(next++ & 63);
+        if (held[found].img.file != NULL) {
+            TexPack_Free(&held[found].img);
+        }
+        if (!TexPack_LoadAnime(id, &held[found].img, &held[found].cut)) {
+            held[found].img.file = NULL;
+            return 0;
+        }
+        held[found].id = id;
+    }
+    *img = held[found].img;
+    *cut = held[found].cut;
+    return 1;
+}
+
+/* The original of an anime file's colours (w x h): as seen in this session, else the file's block under its colours;
+   NULL without either */
+static const uint8_t *anime_original(int id, uint32_t w, uint32_t h) {
+    TexPackImage img;
+    int k, cut;
+    for (k = 0; k < 64; k++) {
+        if (sAnimeOrig[k].px != NULL && sAnimeOrig[k].id == id && sAnimeOrig[k].w == w && sAnimeOrig[k].h == h) {
+            return (const uint8_t *)sAnimeOrig[k].px;
+        }
+    }
+    if (!anime_held(id, &img, &cut) || img.format != GS_TEXFMT_RGBA8 || img.w != w) {
+        return NULL;
+    }
+    return img.h == 4 * h ? img.data[0] + (size_t)w * h * 3 * 4 : img.h == 3 * h ? img.data[0] + (size_t)w * h * 2 * 4 : NULL;
+}
+
+/* Each colour channel of picture n against picture o (count texels, RGBA) as a straight line (n = slope * o + offset):
+   the worst channel's residual (RMS, 0..255), and in mean[] the mean difference n - o of each. The same picture only
+   lit otherwise (a palette tinted, brightened or darkened) fits it; another picture, or other colours, does not. */
+static float sTintSlope[3] = {1.0f, 1.0f, 1.0f}, sTintOffset[3]; /* the last tint measured (anime_texture), for anime_derive */
+static unsigned sTintFrame;
+static float sFitSlope[3], sFitOffset[3], sFitSpread[3]; /* the last anime_fit's lines */
+
+static double anime_fit(const uint8_t *o, const uint8_t *n, uint32_t count, double mean[3]) {
+    double worst = 0.0;
+    uint32_t i;
+    int k;
+    for (k = 0; k < 3; k++) {
+        double sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0, nn = (double)count, den, slope, offset, err = 0.0;
+        for (i = 0; i < count; i++) {
+            double ox = o[i * 4 + k], ny = n[i * 4 + k];
+            sx += ox;
+            sy += ny;
+            sxx += ox * ox;
+            sxy += ox * ny;
+        }
+        den = nn * sxx - sx * sx;
+        slope = den > 1e-6 ? (nn * sxy - sx * sy) / den : 0.0;
+        offset = (sy - slope * sx) / nn;
+        for (i = 0; i < count; i++) {
+            double d = n[i * 4 + k] - (slope * o[i * 4 + k] + offset);
+            err += d * d;
+        }
+        err = sqrt(err / nn);
+        worst = err > worst ? err : worst;
+        mean[k] = (sy - sx) / nn;
+        sFitSlope[k] = (float)slope;
+        sFitOffset[k] = (float)offset;
+        sFitSpread[k] = (float)sqrt(den > 0.0 ? den : 0.0) / (float)nn; /* (the original's spread in the channel) */
+    }
+    return worst;
+}
+
+static GsTex anime_texture(int id, int other, const uint32_t *px, uint32_t w, uint32_t h, float *cut, int *tones) {
+    TexPackImage img;
+    int c = 0, k, slot = -1, n = 2;
+    uint32_t i, x, y;
+    GsTex tex;
+    const uint8_t *fileOriginal = NULL; /* the original as the file keeps it (its third block), if it does */
+
+    *cut = 0.0f;
+    *tones = 2;
+    if (other) {
+        /* The same texture under a palette with no file of its own (a fight's, a flash's): of the folder's files for
+           it under each palette (the expressions of a pair of eyes, the faces of two costumes), the one whose original
+           is nearest to this. Taking the first, a pair of eyes got another expression's colours with the difference
+           added: odd eyes and a yellowish face in the close-ups. */
+        int sib[32], ns = TexPack_AnimeSiblings(id, sib, 32), s;
+        uint64_t best = ~0ull;
+        const uint8_t *now = (const uint8_t *)px;
+        for (s = 0; s < ns && ns > 1; s++) {
+            const uint8_t *o = anime_original(sib[s], w, h);
+            uint64_t d = 0;
+            if (o == NULL) {
+                continue;
+            }
+            for (i = 0; i < w * h * 4; i++) {
+                if ((i & 3) != 3) {
+                    d += (uint64_t)abs((int)now[i] - (int)o[i]);
+                }
+            }
+            if (d < best) {
+                best = d;
+                id = sib[s];
+            }
+        }
+    }
+    for (k = 0; k < 64; k++) {
+        if (sAnimeOrig[k].px != NULL && sAnimeOrig[k].id == id) {
+            slot = k;
+            break;
+        }
+    }
+    if (!other) {
+        if (slot < 0) {
+            slot = (int)(sAnimeOrigNext++ & 63);
+        }
+        if (sAnimeOrig[slot].px == NULL || sAnimeOrig[slot].w != w || sAnimeOrig[slot].h != h) {
+            free(sAnimeOrig[slot].px);
+            sAnimeOrig[slot].px = (uint32_t *)malloc((size_t)w * h * 4);
+            if (sAnimeOrig[slot].px == NULL) {
+                return 0;
+            }
+        }
+        memcpy(sAnimeOrig[slot].px, px, (size_t)w * h * 4);
+        sAnimeOrig[slot].id = id;
+        sAnimeOrig[slot].w = w;
+        sAnimeOrig[slot].h = h;
+    }
+    if (!anime_held(id, &img, &c)) {
+        return 0;
+    }
+    if (img.format != GS_TEXFMT_RGBA8 || img.w != w || (img.h != 2 * h && img.h != 3 * h && img.h != 4 * h)) {
+        return 0;
+    }
+    /* Four blocks: three tones (lit, middle, shadow) and the original (gs_texpack.h, TexPack_AnimeMid) */
+    n = img.h == 4 * h ? 3 : 2;
+    /* A block under the colours (gs_texpack.h): the texture as it was when its anime colours were made. Only the
+       colours are uploaded. */
+    if (img.h == (uint32_t)(n + 1) * h) {
+        fileOriginal = img.data[0] + (size_t)w * h * n * 4;
+        img.h = n * h;
+        img.bytes[0] = w * h * n * 4;
+        img.levels = 1;
+    }
+    if (other) {
+        /* Another palette than the one the colours were made for: the same picture in a fight (each fighter's
+           palette has its own object number in the alpha), the game lighting it for a scene (the intro, a finishing
+           move, a rush: the whole palette tinted) or its flash over it. The original is the one seen in this session,
+           else the copy in the file's block under the colours; without either, nothing.
+           Each channel of this against the original as a straight line (this = slope * original + offset): the same
+           picture only lit otherwise fits it (a palette tinted, brightened or darkened, held at 255 here and there);
+           another fighter's colours on the same texture (another costume) do not, and get nothing. Lit otherwise, the
+           colours are the anime ones as they are (the game's tint added to them, or the anime colours dropped where it
+           darkened, was a face yellowed or in the game's own shading in the close-ups); only a flash (the whole picture
+           much lighter: a hit) is added to them, so it is still seen. */
+        const uint8_t *o = NULL, *px8 = (const uint8_t *)px;
+        uint8_t *a;
+        double mean[3], worst;
+        int flash;
+        if (slot >= 0 && sAnimeOrig[slot].w == w && sAnimeOrig[slot].h == h) {
+            o = (const uint8_t *)sAnimeOrig[slot].px;
+        } else {
+            o = fileOriginal;
+        }
+        if (o == NULL) {
+            return 0;
+        }
+        worst = anime_fit(o, px8, w * h, mean);
+        flash = mean[0] >= 40.0 && mean[1] >= 40.0 && mean[2] >= 40.0;
+        for (k = 0; k < 3; k++) {
+            /* a picture gone all one colour in a channel the original has a spread in: not the picture lit
+               otherwise but the game's own effect over it (a fighter painted red for a moment in an intro): the game's */
+            if (sFitSpread[k] > 8.0f && sFitSlope[k] < 0.25f) {
+                worst = 99.0;
+            }
+        }
+        if (worst <= 12.0 && sFitSlope[0] > 0.3f && sFitSlope[1] > 0.3f && sFitSlope[2] > 0.3f) {
+            /* (the scene's tint, as this fighter's palettes have it now: anime_derive takes it off a face it has no
+               file for, to know its colours) */
+            for (k = 0; k < 3; k++) {
+                sTintSlope[k] = sFitSlope[k];
+                sTintOffset[k] = sFitOffset[k];
+            }
+            sTintFrame = gGsFrame;
+        }
+        if (getenv("BT3_ANIME_LOG") != NULL) {
+            fprintf(stderr, "anime: other palette %s: fit %.1f, mean %.0f %.0f %.0f: %s\n", TexPack_Path(id), worst, mean[0], mean[1],
+                    mean[2], worst > 12.0 ? "another picture, none" : flash ? "a flash, added" : "lit otherwise, as they are");
+        }
+        if (worst > 12.0) {
+            return 0;
+        }
+        if (!flash) {
+            tex = pack_texture(&img);
+            *cut = (float)c / 300.0f;
+            *tones = tex != 0 ? n : 2;
+            return tex;
+        }
+        /* (a copy: the one held stays the original's) */
+        a = (uint8_t *)malloc((size_t)w * h * n * 4);
+        if (a == NULL) {
+            return 0;
+        }
+        memcpy(a, img.data[0], (size_t)w * h * n * 4);
+        img.data[0] = a;
+        img.bytes[0] = w * h * n * 4;
+        for (y = 0; y < h; y++) {
+            for (x = 0; x < w; x++) {
+                for (k = 0; k < 3; k++) {
+                    int add = (int)px8[(y * w + x) * 4 + k] - (int)o[(y * w + x) * 4 + k], v, b;
+                    if (add <= 0) {
+                        continue;
+                    }
+                    for (b = 0; b < n; b++) {
+                        v = a[((y + b * h) * w + x) * 4 + k] + add;
+                        a[((y + b * h) * w + x) * 4 + k] = (uint8_t)(v > 255 ? 255 : v);
+                    }
+                }
+            }
+        }
+        img.levels = 1; /* (its smaller copies are of the colours before) */
+        tex = pack_texture(&img);
+        free(a);
+    } else {
+        tex = pack_texture(&img);
+    }
+    *cut = (float)c / 300.0f; /* (as bt3.look cut: up to a third of the ramp) */
+    *tones = tex != 0 ? n : 2;
+    return tex;
+}
+
+/* The anime folders whose colours were drawn in the last frames (GsGpu_DrawVu0): the fighters on the screen. */
+static struct { int folder; unsigned frame; } sAnimeRecent[8];
+
+static void anime_recent_note(int folder) {
+    int s, oldest = 0;
+    for (s = 0; s < 8; s++) {
+        if (sAnimeRecent[s].folder == folder + 1) {
+            sAnimeRecent[s].frame = gGsFrame;
+            return;
+        }
+        if (sAnimeRecent[s].frame < sAnimeRecent[oldest].frame) {
+            oldest = s;
+        }
+    }
+    sAnimeRecent[oldest].folder = folder + 1;
+    sAnimeRecent[oldest].frame = gGsFrame;
+}
+
+/* A fighter's colours as a table (anime_derive): each colour of the originals of its folder's files, the lit and the
+   shadow colour most of its texels have (0 = left to the game: a line) */
+typedef struct { uint32_t key, lit, shadow, votes; } AnimeColour;
+static struct { int folder, entry, n; AnimeColour *c; } sAnimeTable[24];
+
+static int colour_cmp(const void *a, const void *b) {
+    const AnimeColour *x = a, *y = b;
+    if (x->key != y->key) return x->key < y->key ? -1 : 1;
+    if (x->lit != y->lit) return x->lit < y->lit ? -1 : 1;
+    return x->shadow < y->shadow ? -1 : x->shadow > y->shadow;
+}
+
+static int anime_table(int folder) {
+    int t, ids[64], ne, e, free_slot = -1;
+    AnimeColour *all = NULL;
+    size_t na = 0, cap = 0, i, j;
+    for (t = 0; t < 24; t++) {
+        if (sAnimeTable[t].c != NULL && sAnimeTable[t].folder == folder) {
+            return t;
+        }
+        if (sAnimeTable[t].c == NULL && free_slot < 0) {
+            free_slot = t;
+        }
+    }
+    if (free_slot < 0) {
+        return -1;
+    }
+    t = free_slot;
+    sAnimeTable[t].entry = -1;
+    ne = TexPack_AnimeFolderEntries(folder, ids, 64);
+    for (e = 0; e < ne; e++) {
+        TexPackImage img;
+        int cut;
+        uint32_t w, h, blocks, x, y;
+        if (!TexPack_LoadAnime(ids[e], &img, &cut)) {
+            continue;
+        }
+        /* (a texture's height is a power of two: three blocks of one, or four) */
+        w = img.w;
+        h = img.h / 3;
+        blocks = img.h % 3 == 0 && h != 0 && (h & (h - 1)) == 0 ? 3 : 4;
+        h = img.h / blocks;
+        if (blocks == 4 && (h == 0 || (h & (h - 1)) != 0 || h * 4 != img.h)) {
+            TexPack_Free(&img);
+            continue;
+        }
+        if (img.format == GS_TEXFMT_RGBA8 && h * blocks == img.h) {
+            const uint8_t *d = img.data[0];
+            for (y = 0; y < h; y++) {
+                for (x = 0; x < w; x++) {
+                    const uint8_t *orig = d + ((size_t)((blocks - 1) * h + y) * w + x) * 4;
+                    const uint8_t *lit = d + ((size_t)y * w + x) * 4;
+                    const uint8_t *sh = d + ((size_t)((blocks - 2) * h + y) * w + x) * 4;
+                    AnimeColour c;
+                    if (na == cap) {
+                        cap = cap ? cap * 2 : 65536;
+                        all = realloc(all, cap * sizeof(AnimeColour));
+                    }
+                    c.key = (uint32_t)orig[0] << 16 | (uint32_t)orig[1] << 8 | orig[2];
+                    c.lit = lit[3] < 128 ? 0u : 0xFF000000u | (uint32_t)lit[0] << 16 | (uint32_t)lit[1] << 8 | lit[2];
+                    c.shadow = lit[3] < 128 ? 0u : 0xFF000000u | (uint32_t)sh[0] << 16 | (uint32_t)sh[1] << 8 | sh[2];
+                    c.votes = 1;
+                    all[na++] = c;
+                }
+            }
+            /* the strips of the textures this one is lent to: a file whose own strips are drawn, not hidden */
+            if (sAnimeTable[t].entry < 0 && !TexPack_AnimeIsHidden(ids[e]) && !TexPack_AnimeIsGloss(ids[e]) &&
+                !TexPack_AnimeIsHair(ids[e]) && blocks == 3) {
+                sAnimeTable[t].entry = ids[e];
+            }
+        }
+        TexPack_Free(&img);
+    }
+    if (all == NULL || sAnimeTable[t].entry < 0) {
+        free(all);
+        return -1;
+    }
+    qsort(all, na, sizeof(AnimeColour), colour_cmp);
+    sAnimeTable[t].c = malloc(na * sizeof(AnimeColour));
+    sAnimeTable[t].n = 0;
+    for (i = 0; i < na; i = j) {
+        /* each colour: the pair most of its texels have */
+        size_t best = i, bestVotes = 0, k = i;
+        for (j = i; j < na && all[j].key == all[i].key; j++) {
+        }
+        while (k < j) {
+            size_t m = k;
+            while (m < j && all[m].lit == all[k].lit && all[m].shadow == all[k].shadow) {
+                m++;
+            }
+            if (m - k > bestVotes) {
+                bestVotes = m - k;
+                best = k;
+            }
+            k = m;
+        }
+        all[best].votes = (uint32_t)bestVotes;
+        sAnimeTable[t].c[sAnimeTable[t].n++] = all[best];
+    }
+    free(all);
+    sAnimeTable[t].folder = folder;
+    return t;
+}
+
+/* Anime colours made here for a texture of a fighter that has no file: the faces a fighter makes only in the close-ups
+   (the intro, a finishing move: a face shouting, eyes wide), never seen in the museum where the files are made. Each of
+   its texels takes the lit and shadow colour its colour has in that fighter's own files (anime_table): the colours
+   given for the face seen in the museum go on the faces not seen there. Tried with the folders drawn in the last
+   frames; one counts where nearly all of the picture is its colours (four fifths exactly, nearly all the rest within a
+   few steps): another fighter's or the stage's textures are other colours. Kept by the texture's hash, with the
+   picture it was made from, so the same face lit otherwise for a scene (a palette tinted) keeps them (anime_fit).
+   1 = *img holds them (twice the height, freed by the caller) and *entry the file whose strips' settings they take. */
+static int anime_form_usable(int folder); /* (below, with the forms seen) */
+
+/* (anime_derive) two colours (0xRRGGBB) not of one kind: one with colour and the other grey or white (an iris and the
+   white of the eye), or both with colour and hues more than 40 degrees apart (an iris and the skin). Dark ones are not
+   told apart (lines). */
+static int anime_hue_far(uint32_t a, uint32_t b) {
+    float hs[2][3];
+    uint32_t c[2] = {a, b};
+    int i;
+    for (i = 0; i < 2; i++) {
+        float r = (float)(c[i] >> 16 & 255) / 255.0f, g = (float)(c[i] >> 8 & 255) / 255.0f, bl = (float)(c[i] & 255) / 255.0f;
+        float mx = r > g ? (r > bl ? r : bl) : (g > bl ? g : bl), mn = r < g ? (r < bl ? r : bl) : (g < bl ? g : bl);
+        float l = (mx + mn) / 2.0f, d = mx - mn, h = 0.0f;
+        float s = d == 0.0f ? 0.0f : l > 0.5f ? d / (2.0f - mx - mn) : d / (mx + mn);
+        if (d != 0.0f) {
+            h = mx == r ? 60.0f * fmodf((g - bl) / d, 6.0f) : mx == g ? 60.0f * ((bl - r) / d + 2.0f) : 60.0f * ((r - g) / d + 4.0f);
+            h = h < 0.0f ? h + 360.0f : h;
+        }
+        hs[i][0] = h;
+        hs[i][1] = s;
+        hs[i][2] = l;
+    }
+    if (hs[0][2] < 0.15f || hs[1][2] < 0.15f) {
+        return 0;
+    }
+    if (fabsf(hs[0][1] - hs[1][1]) > 0.3f) {
+        return 1;
+    }
+    if (hs[0][1] < 0.2f || hs[1][1] < 0.2f) {
+        return 0;
+    }
+    {
+        float dh = fabsf(hs[0][0] - hs[1][0]);
+        return (dh > 180.0f ? 360.0f - dh : dh) > 40.0f;
+    }
+}
+/* The alpha bytes each folder's textures had as they were drawn in this session (a bit each): a fighter's palettes
+   carry its object number there (each fighter its own in a fight), so a texture with other ones is another fighter's */
+static uint32_t sFolderAlpha[64][8];
+
+static void anime_alpha_note(int folder, const uint32_t *px, uint32_t count) {
+    uint32_t i;
+    if (folder < 0 || folder >= 64) {
+        return;
+    }
+    for (i = 0; i < count; i++) {
+        uint32_t a = px[i] >> 24;
+        sFolderAlpha[folder][a >> 5] |= 1u << (a & 31);
+    }
+}
+
+static int anime_alpha_same(int folder, const uint32_t *px, uint32_t count) {
+    uint32_t i;
+    if (folder < 0 || folder >= 64) {
+        return 0;
+    }
+    for (i = 0; i < count; i++) {
+        uint32_t a = px[i] >> 24;
+        if (!(sFolderAlpha[folder][a >> 5] & (1u << (a & 31)))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+static struct { uint64_t tex; uint32_t w, h; uint8_t *orig, *anime; int entry; } sDerived[48];
+static unsigned sDerivedNext;
+
+static int anime_derive_try(uint64_t texHash, const uint32_t *px, uint32_t w, uint32_t h, uint8_t **out, int *entry);
+
+/* anime_derive_try, but a texture looked for and not found is not looked for again in a while: a scene's flash
+   repaints the palettes every frame while it fades, each a texture decoded anew, and looking through the files each
+   time held the game up (an intro gone by under a frozen picture). The same face found before is quick (sDerived).
+   Each failure doubles the wait (2, 4, 8 s) and after the fourth the texture is not looked for again: the other
+   fighter's textures, who has no files, failed every 2 s each, all of them, and the fights went by in jolts. */
+static int anime_derive(uint64_t texHash, const uint32_t *px, uint32_t w, uint32_t h, uint8_t **out, int *entry) {
+    static struct { uint64_t key; unsigned frame, count; } failed[512];
+    static unsigned next;
+    uint64_t key = texHash ^ ((uint64_t)w << 48) ^ ((uint64_t)h << 36);
+    int q, slot = -1;
+    for (q = 0; q < 512; q++) {
+        if (failed[q].key == key && failed[q].count != 0) {
+            if (failed[q].count >= 4 || failed[q].frame + (120u << (failed[q].count - 1)) > gGsFrame) {
+                *out = NULL;
+                return 0;
+            }
+            slot = q;
+            break;
+        }
+    }
+    if (anime_derive_try(texHash, px, w, h, out, entry)) {
+        if (slot >= 0) {
+            failed[slot].count = 0;
+        }
+        return 1;
+    }
+    if (slot < 0) {
+        slot = (int)(next++ & 511);
+        failed[slot].key = key;
+        failed[slot].count = 0;
+    }
+    failed[slot].frame = gGsFrame;
+    failed[slot].count++;
+    return 0;
+}
+
+static int anime_derive_try(uint64_t texHash, const uint32_t *px, uint32_t w, uint32_t h, uint8_t **out, int *entry) {
+    const uint8_t *now = (const uint8_t *)px;
+    uint8_t *p;
+    int s, r, k;
+    uint32_t i;
+    *out = NULL;
+    if (texHash == 0 || w < 16 || h < 16) {
+        return 0;
+    }
+    {   /* Only a fighter's own art: its texels carry the model's material number in the alpha (0..15; the stage, the
+           menus, the HUD 0x80 and up), and a picture, not one colour or two (a plain texture matches any table) */
+        uint32_t top = 0, run = 0, distinct = 0, seen[8];
+        int q;
+        for (i = 0; i < w * h; i++) {
+            uint32_t key = px[i] & 0xFFFFFFu;
+            if (now[i * 4 + 3] >= 0x40) {
+                return 0;
+            }
+            for (q = 0; q < (int)distinct && seen[q] != key; q++) {
+            }
+            if (q == (int)distinct && distinct < 8) {
+                seen[distinct++] = key;
+            }
+            run = i > 0 && (px[i] & 0xFFFFFFu) == (px[i - 1] & 0xFFFFFFu) ? run + 1 : 0;
+            top = run > top ? run : top;
+        }
+        if (distinct < 4 || top * 10 > w * h * 6) {
+            return 0;
+        }
+    }
+    for (s = 0; s < 48; s++) { /* the same face seen before: lit otherwise now, the same colours */
+        double mean[3];
+        if (sDerived[s].anime != NULL && sDerived[s].tex == texHash && sDerived[s].w == w && sDerived[s].h == h) {
+            if (anime_fit(sDerived[s].orig, now, w * h, mean) > 12.0) {
+                return 0;
+            }
+            *out = malloc((size_t)w * h * 8);
+            memcpy(*out, sDerived[s].anime, (size_t)w * h * 8);
+            *entry = sDerived[s].entry;
+            return 1;
+        }
+    }
+    /* Seen first in a scene's light (the close-ups are where these faces come): the tint the fighter's other textures
+       have just now taken off, to find its colours */
+    p = malloc((size_t)w * h * 4);
+    memcpy(p, now, (size_t)w * h * 4);
+    if (sTintFrame + 10 >= gGsFrame) {
+        for (i = 0; i < w * h; i++) {
+            for (k = 0; k < 3; k++) {
+                float v = ((float)now[i * 4 + k] - sTintOffset[k]) / sTintSlope[k];
+                p[i * 4 + k] = (uint8_t)(v < 0.0f ? 0 : v > 255.0f ? 255 : (int)(v + 0.5f));
+            }
+        }
+    }
+    /* First, the nearest of the fighter's own files: the same face with another expression, or broken, is the same
+       picture's colours in a palette a few steps off (Goku (Mid)'s broken face: its eyebrows 40 steps bluer than those
+       of the face it was made from). Of the files of its size of the folders drawn in the last frames (a form only
+       while it is on the screen), the one whose colours are nearest to this one's, colour by colour, weighed by how
+       much of the picture each is: each colour of this then takes the lit and shadow colour of its nearest there. */
+    {
+        uint32_t nc = 0, cnt[256], col[256], best = 0, bestErr = ~0u;
+        int bestId = -1, rr;
+        for (i = 0; i < w * h; i++) {
+            uint32_t key = (uint32_t)p[i * 4] << 16 | (uint32_t)p[i * 4 + 1] << 8 | p[i * 4 + 2], q;
+            for (q = 0; q < nc && col[q] != key; q++) {
+            }
+            if (q == nc) {
+                if (nc == 256) {
+                    break;
+                }
+                col[nc] = key;
+                cnt[nc++] = 0;
+            }
+            cnt[q]++;
+        }
+        for (rr = 0; rr < 8 && i == w * h; rr++) {
+            int folder = sAnimeRecent[rr].folder - 1, ids[64], ne, e;
+            if (folder < 0 || sAnimeRecent[rr].frame + 10 < gGsFrame || !anime_form_usable(folder)) {
+                continue;
+            }
+            ne = TexPack_AnimeFolderEntries(folder, ids, 64);
+            for (e = 0; e < ne; e++) {
+                TexPackImage img;
+                int cut, nb;
+                const uint8_t *orig;
+                uint32_t fc[256], nf = 0, q, j, err = 0, worstBig = 0;
+                if (TexPack_AnimeIsHidden(ids[e]) || TexPack_AnimeIsGloss(ids[e]) || !anime_held(ids[e], &img, &cut) ||
+                    img.format != GS_TEXFMT_RGBA8 || img.w != w || (img.h != 3 * h && img.h != 4 * h)) {
+                    continue;
+                }
+                nb = img.h == 4 * h ? 4 : 3;
+                orig = img.data[0] + (size_t)w * h * (nb - 1) * 4;
+                for (j = 0; j < w * h && nf < 256; j++) {
+                    uint32_t key = (uint32_t)orig[j * 4] << 16 | (uint32_t)orig[j * 4 + 1] << 8 | orig[j * 4 + 2];
+                    for (q = 0; q < nf && fc[q] != key; q++) {
+                    }
+                    if (q == nf) {
+                        fc[nf++] = key;
+                    }
+                }
+                for (q = 0; q < nc; q++) {
+                    uint32_t bd = ~0u;
+                    for (j = 0; j < nf; j++) {
+                        int dr = (int)(col[q] >> 16) - (int)(fc[j] >> 16), dg = (int)(col[q] >> 8 & 255) - (int)(fc[j] >> 8 & 255),
+                            db = (int)(col[q] & 255) - (int)(fc[j] & 255);
+                        uint32_t d = (uint32_t)(dr * dr + dg * dg + db * db);
+                        bd = d < bd ? d : bd;
+                    }
+                    bd = (uint32_t)sqrt((double)bd);
+                    err += bd * cnt[q];
+                    if (cnt[q] * 50 > w * h && bd > worstBig) {
+                        worstBig = bd;
+                    }
+                }
+                /* (near: on average within 8 steps, and no colour of a fiftieth of the picture more than 48 off) */
+                if (err <= 8u * w * h && worstBig <= 48 && err < bestErr) {
+                    bestErr = err;
+                    bestId = ids[e];
+                    best = (uint32_t)nb;
+                }
+            }
+        }
+        if (bestId >= 0) {
+            TexPackImage img;
+            int cut;
+            uint8_t *a = malloc((size_t)w * h * 8);
+            uint32_t q, j;
+            const uint8_t *orig, *lit, *sh;
+            anime_held(bestId, &img, &cut);
+            orig = img.data[0] + (size_t)w * h * (best - 1) * 4;
+            lit = img.data[0];
+            sh = img.data[0] + (size_t)w * h * (best - 2) * 4;
+            /* Which of its colours each colour of this is. By place first: the colour the file has most where this one
+               has it (the same face broken or with another expression lies on the same places: its eyebrows where the
+               file's eyebrows are, whatever the steps between their palettes; by nearness alone, eyebrows a few steps
+               off went to a skin shade nearer to them and lost their colour). Only where that is far off (more than 64
+               steps: a scratch on skin, something the file does not have there), the nearest colour of the file. */
+            uint32_t fc[256], nf = 0, *votes, ref[256];
+            uint8_t leave[256];
+            int pix;
+            for (j = 0; j < w * h && nf < 256; j++) {
+                uint32_t key = (uint32_t)orig[j * 4] << 16 | (uint32_t)orig[j * 4 + 1] << 8 | orig[j * 4 + 2], m;
+                for (m = 0; m < nf && fc[m] != key; m++) {
+                }
+                if (m == nf) {
+                    fc[nf++] = key;
+                }
+            }
+            votes = calloc((size_t)nc * 256, sizeof(uint32_t));
+            for (i = 0; i < w * h; i++) {
+                uint32_t key = (uint32_t)p[i * 4] << 16 | (uint32_t)p[i * 4 + 1] << 8 | p[i * 4 + 2], rk, m;
+                rk = (uint32_t)orig[i * 4] << 16 | (uint32_t)orig[i * 4 + 1] << 8 | orig[i * 4 + 2];
+                for (q = 0; q < nc && col[q] != key; q++) {
+                }
+                for (m = 0; m < nf && fc[m] != rk; m++) {
+                }
+                if (q < nc && m < nf) {
+                    votes[q * 256 + m]++;
+                }
+            }
+            for (q = 0; q < nc; q++) {
+                uint32_t m, top = 0, pick = 0, bd = ~0u;
+                int dr, dg, db;
+                for (m = 0; m < nf; m++) {
+                    if (votes[q * 256 + m] > top) {
+                        top = votes[q * 256 + m];
+                        pick = m;
+                    }
+                }
+                for (m = 0; m < nf && fc[m] != col[q]; m++) {
+                }
+                if (m < nf) { /* the very colour is there: the same palette (another expression of the same face) */
+                    pick = m;
+                    top = 1;
+                }
+                dr = (int)(col[q] >> 16) - (int)(fc[pick] >> 16);
+                dg = (int)(col[q] >> 8 & 255) - (int)(fc[pick] >> 8 & 255);
+                db = (int)(col[q] & 255) - (int)(fc[pick] & 255);
+                if (top != 0 && m == nf && anime_hue_far(col[q], fc[pick])) {
+                    top = 0; /* by place to another hue (an iris to the skin or the white): the nearest instead */
+                }
+                if (top == 0 || dr * dr + dg * dg + db * db > 64 * 64) {
+                    for (m = 0; m < nf; m++) {
+                        int er = (int)(col[q] >> 16) - (int)(fc[m] >> 16), eg = (int)(col[q] >> 8 & 255) - (int)(fc[m] >> 8 & 255),
+                            eb = (int)(col[q] & 255) - (int)(fc[m] & 255);
+                        uint32_t d = (uint32_t)(er * er + eg * eg + eb * eb);
+                        if (d < bd) {
+                            bd = d;
+                            pick = m;
+                        }
+                    }
+                }
+                ref[q] = fc[pick];
+                leave[q] = (uint8_t)anime_hue_far(col[q], fc[pick]); /* nothing of its hue there: left to the game */
+                /* (a texel of the file with that colour: where this one's place does not have it) */
+                cnt[q] = 0;
+                for (j = 0; j < w * h; j++) {
+                    if (((uint32_t)orig[j * 4] << 16 | (uint32_t)orig[j * 4 + 1] << 8 | orig[j * 4 + 2]) == ref[q]) {
+                        cnt[q] = j;
+                        break;
+                    }
+                }
+            }
+            free(votes);
+            for (pix = 0; pix < (int)(w * h); pix++) {
+                uint32_t key = (uint32_t)p[pix * 4] << 16 | (uint32_t)p[pix * 4 + 1] << 8 | p[pix * 4 + 2], at;
+                for (q = 0; q < nc && col[q] != key; q++) {
+                }
+                /* the file's own lit and shadow colour at this very place where it has the same colour there (a colour
+                   split into parts by place keeps its parts), else at a texel of that colour */
+                at = ((uint32_t)orig[pix * 4] << 16 | (uint32_t)orig[pix * 4 + 1] << 8 | orig[pix * 4 + 2]) == ref[q] ? (uint32_t)pix : cnt[q];
+                memcpy(a + (size_t)pix * 4, lit + (size_t)at * 4, 4);
+                memcpy(a + ((size_t)w * h + pix) * 4, sh + (size_t)at * 4, 4);
+                if (lit[at * 4 + 3] < 128 || leave[q]) { /* a line there (or nothing of its hue): left to the game here too */
+                    a[pix * 4 + 3] = 0;
+                    a[((size_t)w * h + pix) * 4 + 3] = 0;
+                }
+            }
+            {
+                unsigned slot = sDerivedNext++ % 48;
+                free(sDerived[slot].orig);
+                free(sDerived[slot].anime);
+                sDerived[slot].tex = texHash;
+                sDerived[slot].w = w;
+                sDerived[slot].h = h;
+                sDerived[slot].orig = malloc((size_t)w * h * 4);
+                memcpy(sDerived[slot].orig, p, (size_t)w * h * 4);
+                sDerived[slot].anime = malloc((size_t)w * h * 8);
+                memcpy(sDerived[slot].anime, a, (size_t)w * h * 8);
+                sDerived[slot].entry = bestId;
+            }
+            if (getenv("BT3_ANIME_LOG") != NULL) {
+                fprintf(stderr, "anime: made for %016llx %ux%u from the nearest file, %s (%.1f steps off)\n",
+                        (unsigned long long)texHash, w, h, TexPack_Path(bestId), (double)bestErr / (w * h));
+            }
+            *out = a;
+            *entry = bestId;
+            free(p);
+            return 1;
+        }
+    }
+    /* the folders drawn in the last frames, the one most of this picture's colours are in first: with several of a
+       fighter's forms sharing colours, the one on the screen (a form only while it is drawn: anime_form) */
+    int order[8], no = 0, ex[8];
+    for (r = 0; r < 8; r++) {
+        int t, folder = sAnimeRecent[r].folder - 1, q;
+        uint32_t hits = 0;
+        if (folder < 0 || sAnimeRecent[r].frame + 10 < gGsFrame || !anime_form_usable(folder) ||
+            !anime_alpha_same(folder, px, w * h) || (t = anime_table(folder)) < 0) {
+            continue;
+        }
+        for (i = 0; i < w * h; i += 7) {
+            uint32_t key = (uint32_t)p[i * 4] << 16 | (uint32_t)p[i * 4 + 1] << 8 | p[i * 4 + 2];
+            int lo = 0, hi = sAnimeTable[t].n - 1;
+            while (lo <= hi) {
+                int mid = (lo + hi) / 2;
+                if (sAnimeTable[t].c[mid].key == key) { hits++; break; }
+                if (sAnimeTable[t].c[mid].key < key) lo = mid + 1; else hi = mid - 1;
+            }
+        }
+        for (q = no; q > 0 && ex[q - 1] < (int)hits; q--) {
+            order[q] = order[q - 1];
+            ex[q] = ex[q - 1];
+        }
+        order[q] = r;
+        ex[q] = (int)hits;
+        no++;
+    }
+    for (s = 0; s < no; s++) {
+        int t, folder, *at;
+        uint32_t exact = 0, near = 0, miss = 0;
+        uint8_t *a;
+        r = order[s];
+        folder = sAnimeRecent[r].folder - 1;
+        if ((t = anime_table(folder)) < 0) {
+            continue;
+        }
+        /* first the exact colours, given up as soon as a fifth of the picture is not (most textures: at once) */
+        at = malloc((size_t)w * h * sizeof(int));
+        for (i = 0; i < w * h && miss * 5 <= w * h; i++) {
+            uint32_t key = (uint32_t)p[i * 4] << 16 | (uint32_t)p[i * 4 + 1] << 8 | p[i * 4 + 2];
+            int lo = 0, hi = sAnimeTable[t].n - 1;
+            at[i] = -1;
+            while (lo <= hi) {
+                int mid = (lo + hi) / 2;
+                if (sAnimeTable[t].c[mid].key == key) { at[i] = mid; break; }
+                if (sAnimeTable[t].c[mid].key < key) lo = mid + 1; else hi = mid - 1;
+            }
+            exact += at[i] >= 0;
+            miss += at[i] < 0;
+        }
+        if (miss * 5 > w * h) {
+            free(at);
+            continue;
+        }
+        a = malloc((size_t)w * h * 8);
+        for (i = 0; i < w * h; i++) {
+            int found = at[i];
+            const AnimeColour *c;
+            if (found < 0) { /* the nearest of its colours, within 16 steps a channel */
+                int m, bd = 16 * 16 * 3 + 1;
+                for (m = 0; m < sAnimeTable[t].n; m++) {
+                    uint32_t k2 = sAnimeTable[t].c[m].key;
+                    int dr = (int)(k2 >> 16) - p[i * 4], dg = (int)(k2 >> 8 & 255) - p[i * 4 + 1], db = (int)(k2 & 255) - p[i * 4 + 2];
+                    int d2 = dr * dr + dg * dg + db * db;
+                    if (d2 < bd && abs(dr) <= 16 && abs(dg) <= 16 && abs(db) <= 16) {
+                        bd = d2;
+                        found = m;
+                    }
+                }
+                near += found >= 0;
+            }
+            c = found >= 0 ? &sAnimeTable[t].c[found] : NULL;
+            {
+                uint32_t lit = c != NULL ? c->lit : 0, sh = c != NULL ? c->shadow : 0;
+                uint8_t *l = a + (size_t)i * 4, *d = a + ((size_t)w * h + i) * 4;
+                l[0] = (uint8_t)(lit >> 16); l[1] = (uint8_t)(lit >> 8); l[2] = (uint8_t)lit; l[3] = (uint8_t)(lit >> 24);
+                d[0] = (uint8_t)(sh >> 16); d[1] = (uint8_t)(sh >> 8); d[2] = (uint8_t)sh; d[3] = (uint8_t)(sh >> 24);
+            }
+        }
+        free(at);
+        if (exact * 5 >= w * h * 4 && exact + near + w * h / 100 >= w * h) {
+            unsigned slot = sDerivedNext++ % 48;
+            free(sDerived[slot].orig);
+            free(sDerived[slot].anime);
+            sDerived[slot].tex = texHash;
+            sDerived[slot].w = w;
+            sDerived[slot].h = h;
+            sDerived[slot].orig = malloc((size_t)w * h * 4);
+            memcpy(sDerived[slot].orig, p, (size_t)w * h * 4);
+            sDerived[slot].anime = malloc((size_t)w * h * 8);
+            memcpy(sDerived[slot].anime, a, (size_t)w * h * 8);
+            sDerived[slot].entry = sAnimeTable[t].entry;
+            if (getenv("BT3_ANIME_LOG") != NULL) {
+                fprintf(stderr, "anime: made for %016llx %ux%u from the colours of %s (exact %u, near %u of %u)\n",
+                        (unsigned long long)texHash, w, h, TexPack_Path(sAnimeTable[t].entry), exact, near, w * h);
+            }
+            *out = a;
+            *entry = sAnimeTable[t].entry;
+            free(p);
+            return 1;
+        }
+        free(a);
+    }
+    free(p);
+    return 0;
+
 }
 
 /* Decoding a texture's rows: a large one is shared among worker threads (and the caller), which only read GS memory
@@ -1024,7 +1887,16 @@ static GsTex texture_get(int ctx, int menuHd) {
     if (originalBootText) { gen ^= 0xB007F017u; }
     gen ^= bits <= 8 ? MenuLabels_ArtKey() : 0; /* the chosen language's menu art ready: decoded again */
     int toonSharp = sToonWanted ? Mods_Look()->shading : 0; /* (a fighter's shading ramp, redrawn: its own copy) */
-    if (toonSharp > 0) { gen ^= 0x70017000u + (uint32_t)toonSharp * 0x9E3779B1u; }
+    int toonCut = toonSharp > 0 ? Mods_Look()->cut : 0;
+    float toonEdge = 0.5f, toonDir = 0.0f;
+    int animeIds[ANIME_FORMS], animeFound = 0, animeOther = 0, animeCount = 0, f;
+    GsTex animeTex[ANIME_FORMS];
+    float animeCut[ANIME_FORMS];
+    int animeEntry[ANIME_FORMS], animeTones[ANIME_FORMS], animeRow = -1;
+    uint64_t markForms = 0;
+    uint32_t rampHash = 0, packName = 0;
+    int rampFlat = 0;
+    if (toonSharp > 0) { gen ^= 0x70017000u + (uint32_t)toonSharp * 0x9E3779B1u + (uint32_t)toonCut * 0x85EBCA77u; }
     if (sTexPackOn && TexPack_Count() != 0) {
         gen ^= 0x5BD1E995u; /* with the pack and without it are different textures: switching it takes effect at once */
     }
@@ -1073,6 +1945,11 @@ static GsTex texture_get(int ctx, int menuHd) {
                     sTex[n++] = sTex[i];
                 } else {
                     sBackend->texDestroy(sTex[i].tex);
+                    for (f = 0; f < sTex[i].animeCount; f++) {
+                        if (sTex[i].anime[f] != 0) {
+                            sBackend->texDestroy(sTex[i].anime[f]);
+                        }
+                    }
                 }
             }
             gsTexCount = n;
@@ -1088,6 +1965,8 @@ static GsTex texture_get(int ctx, int menuHd) {
     if (sTexPackOn && TexPack_Count() != 0) {
         int id = TexPack_Lookup(tbp, tbw, psm, tw, th, (uint32_t)((t0 >> 34) & 1), cbp, cpsm, &packMaxAlpha);
         int got = id >= 0 ? TexPack_Get(id, &pack) : -1;
+        animeFound = sToonWanted ? 0 : TexPack_AnimeFind(animeIds, ANIME_FORMS, &animeOther);
+        packName = (uint32_t)(TexPack_LastTex() >> 32);
         if (got > 0 && sBackend->texSlotsLeft() >= pack.levels && pack_budget_take(&pack)) {
             replaced = 1;
             gGpuTexReplaced++;
@@ -1169,6 +2048,7 @@ static GsTex texture_get(int ctx, int menuHd) {
                     (double)(gpu_now() - font_t0) / 1e6);
         }
     }
+
     if(replaced && px != NULL){free(px);px=NULL;}
     if (menuHd && !replaced && !menuText && px != NULL) {
         uint32_t n;
@@ -1190,9 +2070,25 @@ static GsTex texture_get(int ctx, int menuHd) {
         if (Bt4MenuHD_Request(px, (int)tw, (int)th, sMenuHD, hdKey, NULL) >= 0) hdPending = sMenuHD;
 
     }
+    if (sToonWanted && !replaced && !menuText && px != NULL) {
+        /* which ramp this is, for the anime colours of a form of a fighter (anime_ramps.txt): its colours, each
+           channel rounded to 8 steps (a ramp redrawn by the game's flicker by a step or two is still the same one) */
+        uint32_t n, lo = 255 * 3, hi = 0;
+        rampHash = 2166136261u;
+        for (n = 0; n < tw * th; n++) {
+            uint32_t l = (px[n] & 0xFF) + ((px[n] >> 8) & 0xFF) + ((px[n] >> 16) & 0xFF);
+            rampHash = (rampHash ^ ((px[n] >> 5) & 0x07070707u)) * 16777619u;
+            lo = l < lo ? l : lo;
+            hi = l > hi ? l : hi;
+        }
+        /* a ramp of one tone (light and shadow alike: the dark shell that outlines a model) is no light and shadow at
+           all: the anime pass leaves what is drawn with it to the game */
+        rampFlat = hi - lo < 36;
+
+    }
     if (toonSharp > 0 && !replaced && !menuText && px != NULL) {
         uint32_t sw = 0, sh = 0;
-        uint32_t *sharp = toon_sharpen(px, tw, th, toonSharp, &sw, &sh);
+        uint32_t *sharp = toon_sharpen(px, tw, th, toonSharp, toonCut, &sw, &sh, &toonEdge, &toonDir);
         if (sharp != NULL) {
             free(px);
             px = sharp;
@@ -1200,6 +2096,51 @@ static GsTex texture_get(int ctx, int menuHd) {
             rh = sh;
         }
     }
+    for (f = 0; f < animeFound && !replaced && !menuText && px != NULL && rw == tw && rh == th; f++) {
+        if (sBackend->texSlotsLeft() > 1) {
+            animeTex[animeCount] = anime_texture(animeIds[f], animeOther, px, tw, th, &animeCut[animeCount],
+                                                 &animeTones[animeCount]);
+            animeEntry[animeCount] = animeIds[f];
+            animeCount += animeTex[animeCount] != 0;
+        }
+    }
+    for (f = 0; f < animeCount && px != NULL; f++) {
+        anime_alpha_note(TexPack_AnimeFolder(animeEntry[f]), px, tw * th);
+    }
+    if (animeFound == 0 && !sToonWanted && sTexPackOn && TexPack_Count() != 0 && bits <= 8 && !replaced && !menuText &&
+        px != NULL && rw == tw && rh == th && sBackend->texSlotsLeft() > 1) {
+        /* no file for it: a face of a fighter on the screen seen only in close-ups gets that fighter's colours (anime_derive) */
+        uint8_t *made;
+        int entry;
+        if (anime_derive(TexPack_LastTex(), px, tw, th, &made, &entry)) {
+            TexPackImage img, held;
+            int c = 0;
+            memset(&img, 0, sizeof(img));
+            img.w = tw;
+            img.h = th * 2;
+            img.format = GS_TEXFMT_RGBA8;
+            img.levels = 1;
+            img.data[0] = made;
+            img.bytes[0] = tw * th * 8;
+            animeTex[0] = pack_texture(&img);
+            free(made);
+            animeCut[0] = anime_held(entry, &held, &c) ? (float)c / 300.0f : 0.0f;
+            animeEntry[0] = entry;
+            animeTones[0] = 2;
+            animeCount = animeTex[0] != 0;
+        }
+    }
+    if (animeFound > animeCount && getenv("BT3_ANIME_LOG") != NULL) {
+        fprintf(stderr, "anime: frame %u: %ux%u %s: %d of %d made, once more (replaced %d, text %d, pixels %d, size %ux%u, other %d)\n", gGsFrame,
+                (unsigned)tw, (unsigned)th, TexPack_Path(animeIds[0]), animeCount, animeFound, replaced, menuText, px != NULL,
+                (unsigned)rw, (unsigned)rh, animeOther);
+    }
+    /* (read here: the pixels go to the back end below, which keeps them) */
+    if (sTexPackOn && TexPack_Count() != 0 && !sToonWanted && !replaced && !menuText && TexPack_LastTex() != 0) {
+        markForms = TexPack_AnimeFoldersMarking(TexPack_LastTex());
+    }
+    animeRow = (animeCount != 0 || markForms != 0) && px != NULL && rw == tw && rh == th && (px[0] >> 24) < 0x80 ?
+               (int)((px[0] >> 24) / 15) : -1;
     gGpuTexNs += gpu_now() - tex_t0;
     gDrawTexNs += gpu_now() - tex_t0;
     gDrawNewTex++;
@@ -1207,6 +2148,9 @@ static GsTex texture_get(int ctx, int menuHd) {
     t->tex = replaced ? pack_texture(&pack) : sBackend->texCreate(rw, rh, GS_TEXFMT_RGBA8, 1);
     if (t->tex == 0) {
         free(px);
+        for (f = 0; f < animeCount; f++) {
+            sBackend->texDestroy(animeTex[f]);
+        }
         return gsWhite;
     }
     if (!replaced) {
@@ -1254,6 +2198,21 @@ static GsTex texture_get(int ctx, int menuHd) {
     t->packAlpha = packMaxAlpha;
     memcpy(t->avg, sTexAvg, sizeof(t->avg));
     sTexAvg[0] = sTexAvg[1] = sTexAvg[2] = 1.0f;
+    t->toonEdge = toonEdge;
+    t->toonDir = toonDir;
+    t->toonWhy = !sToonWanted ? 0 : toonDir != 0.0f ? 1 : toonSharp <= 0 ? 2 : replaced ? 3 : menuText ? 4 : 5;
+    t->animeCount = animeCount;
+    t->arow = animeRow;
+    t->markForms = markForms;
+    for (f = 0; f < animeCount; f++) {
+        t->anime[f] = animeTex[f];
+        t->animeCut[f] = animeCut[f];
+        t->animeEntry[f] = animeEntry[f];
+        t->animeTones[f] = animeTones[f];
+    }
+    t->rampHash = rampHash;
+    t->rampFlat = rampFlat;
+    t->packName = packName;
     return t->tex;
 }
 
@@ -2469,6 +3428,157 @@ void GsGpu_DrawVu4(int ctx, const float *vertices, uint32_t count, const float *
     gsDraws[gsDrawCount++] = d;
 }
 
+/* The anime pass: a strip whose layer 0 texture has anime colours in the texture pack (Tex.anime, gs_texpack.h) is
+   drawn a third time after its shading layer, with the shading on: the same triangles, the anime texture by the
+   model's own texture coordinates, its lit colour where the strip faces the light past the redrawn ramp's edge
+   (Tex.toonEdge) and its shadow colour elsewhere (shaders/vu0.vert layer 7, gs.frag mode 4). Where the anime
+   texture's alpha is 0, what the game drew stays. Layer 0 leaves here what layer 1 of the same strip needs.
+   With several forms of a fighter on one texture: anime_form. Also after program 8's strips (cloth lit in its vertex
+   colours, no second layer), cut by their brightness. */
+static struct {
+    const float *vertices;
+    uint32_t count;
+    GsTex anime[ANIME_FORMS];
+    float cut[ANIME_FORMS];
+    int entry[ANIME_FORMS];
+    int tones[ANIME_FORMS];
+    int forms;
+    int row; /* the fighter's row of the alpha table (Tex.arow) */
+    int sampler;
+} sAnimeStrip;
+static uint32_t sStripPack; /* (BT3_ANIME_LOG) the texture of the last strip's layer 0: Tex.packName */
+static const float *sHiddenStrip; /* the strip whose layers are not drawn (anime_hide.txt), or NULL */
+static uint32_t sHiddenCount;     /* (and its vertex count) */
+
+/* A strip's texture coordinates as one number (FNV-1a over their bits, the vertex count in it too): the same strip of
+   a model has the same one in every frame, whatever the pose (anime_up.txt names strips by it). */
+static uint32_t strip_uv_hash(const float *vertices, uint32_t count) {
+    uint32_t h = 2166136261u ^ count, n, bits;
+    for (n = 0; n < count; n++) {
+        memcpy(&bits, &vertices[n * 12 + 8], 4);
+        h = (h ^ bits) * 16777619u;
+        memcpy(&bits, &vertices[n * 12 + 9], 4);
+        h = (h ^ bits) * 16777619u;
+    }
+    return h;
+}
+
+void GsDraw_OutlineLook(float *darkness, float *width) {
+    static int read;
+    static float dark = 100.0f, wide = 1.0f;
+    if (!read) {
+        FILE *f = fopen("textures/anime_outline.txt", "r");
+        read = 1;
+        if (f != NULL) {
+            float d, w;
+            int n = fscanf(f, "%f %f", &d, &w);
+            if (n >= 1 && d >= 0.0f && d <= 255.0f) {
+                dark = d;
+            }
+            if (n >= 2 && w >= 0.5f && w <= 3.0f) {
+                wide = w;
+            }
+            fclose(f);
+        }
+    }
+    *darkness = dark;
+    *width = wide;
+}
+
+/* Which way the outline shell faces on the screen, for gs.frag mode 4 (orig.z): 1 = away, 2 = this way, 0 = the anime
+   pass draws over it too. BT3_ANIME_SHELL=<n>, else the number in textures/anime_shell.txt, else 1. */
+static int anime_shell(void) {
+    static int v = -1;
+    if (v < 0) {
+        FILE *f;
+        v = 1;
+        if (getenv("BT3_ANIME_SHELL") != NULL) {
+            v = atoi(getenv("BT3_ANIME_SHELL"));
+        } else if ((f = fopen("textures/anime_shell.txt", "r")) != NULL) {
+            if (fscanf(f, "%d", &v) != 1) {
+                v = 1;
+            }
+            fclose(f);
+        }
+        v = v < 0 || v > 2 ? 1 : v;
+    }
+    return v;
+}
+
+/* Which of the strip's forms to draw: the index, or -1. A form (TexPack_AnimeFolderIsForm) one of whose own textures
+   (its hair, its face: TexPack_AnimeIsMarker) was drawn in the last half second is the form of every strip that has it
+   (a fighter is one form at a time; the same fighter in two forms on the screen at once would take one of them; the
+   half second: a frame without the hair, or a blink, does not switch the colours off and on). Else a folder for any. */
+#define ANIME_FORM_HOLD 30
+/* Each one by the fighter too: the row of the alpha table its textures have (Tex.arow; -1 = not known). Two fighters
+   on the screen, one the form and the other with some of its textures (a shared piece), each are told by their own. */
+static struct { int folder, row; unsigned frame; } sFormSeen[32];
+
+static int form_seen(int s, int folder, int row) {
+    return sFormSeen[s].folder == folder + 1 && sFormSeen[s].frame + ANIME_FORM_HOLD >= gGsFrame &&
+           (row < 0 || sFormSeen[s].row < 0 || sFormSeen[s].row == row);
+}
+
+/* (anime_derive) a folder whose colours would be drawn now: not a form, or a form one of whose textures was just drawn */
+static int anime_form_usable(int folder) {
+    int s;
+    if (!TexPack_AnimeFolderIsForm(folder)) {
+        return 1;
+    }
+    for (s = 0; s < 32; s++) {
+        if (form_seen(s, folder, -1)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* A form seen now by the fighter of alpha row `row` */
+static void form_mark(int folder, int row) {
+    int s, oldest = 0;
+    for (s = 0; s < 32 && !(sFormSeen[s].folder == folder + 1 && sFormSeen[s].row == row); s++) {
+        if (sFormSeen[s].frame < sFormSeen[oldest].frame) {
+            oldest = s;
+        }
+    }
+    s = s < 32 ? s : oldest;
+    sFormSeen[s].folder = folder + 1;
+    sFormSeen[s].row = row;
+    sFormSeen[s].frame = gGsFrame;
+}
+
+static int anime_form(void) {
+    int f, s, any = -1, row = sAnimeStrip.row;
+    for (f = 0; f < sAnimeStrip.forms; f++) {
+        if (TexPack_AnimeIsMarker(sAnimeStrip.entry[f])) {
+            int folder = TexPack_AnimeFolder(sAnimeStrip.entry[f]), oldest = 0;
+            for (s = 0; s < 32 && !(sFormSeen[s].folder == folder + 1 && sFormSeen[s].row == row); s++) {
+                if (sFormSeen[s].frame < sFormSeen[oldest].frame) {
+                    oldest = s;
+                }
+            }
+            s = s < 32 ? s : oldest;
+            sFormSeen[s].folder = folder + 1;
+            sFormSeen[s].row = row;
+            sFormSeen[s].frame = gGsFrame;
+            return f;
+        }
+    }
+    for (f = 0; f < sAnimeStrip.forms; f++) {
+        int folder = TexPack_AnimeFolder(sAnimeStrip.entry[f]);
+        if (!TexPack_AnimeFolderIsForm(folder)) {
+            any = any < 0 ? f : any;
+            continue;
+        }
+        for (s = 0; s < 32; s++) {
+            if (form_seen(s, folder, row)) {
+                return f;
+            }
+        }
+    }
+    return any;
+}
+
 /* Vertex program 0 as a shader: one strip of the fighters' models (see shaders/vu0.vert and gs_vu1.c). The strip
    becomes a triangle list of the program's own 48-byte vertices; the constants go into a uniform block. */
 void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, const float *consts) {
@@ -2477,19 +3587,185 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
     }
     Vu0Uniform u;
     GsDraw d, *last;
-    float us, vs;
+    float us, vs, rampEdge = -1.0f, rampDir = 0.0f, viewSide = 0.0f;
     uint32_t i, k;
+    int form = -1;
 
     if (count < 3 || gsVuVertCount + count > MAX_VU_VERTS || gsVuIdxCount + (count - 2) * 3 > MAX_VU_IDX || gsDrawCount == MAX_DRAWS ||
         gsVuUniCount == MAX_VU_UNIFORMS) {
         return;
     }
+    if (layer == 0 || layer == 3) {
+        sAnimeStrip.vertices = NULL;
+    }
     sToonWanted = layer == 1; /* (the shading ramp: toon_sharpen) */
     if (!draw_state(ctx, 0, 0, 1, &d, &us, &vs)) {
         sToonWanted = 0;
+        if (getenv("BT3_ANIME_LOG") != NULL && layer != 0 && sAnimeStrip.vertices == vertices) {
+            fprintf(stderr, "anime: frame %u layer %d after an anime strip: not drawn (draw_state)\n", gGsFrame, layer);
+        }
         return;
     }
     sToonWanted = 0;
+    /* A strip whose layer 0 texture is in its anime folder's anime_hide.txt, or in anime_gloss.txt and drawn by
+       program 1 (gs_texpack.h): none of its layers drawn. */
+    if (layer == 0 || layer == 3) {
+        sHiddenStrip = sLast != NULL && sLast->tex == d.tex && !d.tex_is_target && sLast->animeCount != 0 &&
+                       (TexPack_AnimeIsHidden(sLast->animeEntry[0]) ||
+                        (layer == 0 && gVuProgram1 && TexPack_AnimeIsGloss(sLast->animeEntry[0]))) ? vertices : NULL;
+        sHiddenCount = count;
+    }
+    /* (its own layers only: the vertices may sit where the next program's are, a shadow's, a debris's) */
+    if (sHiddenStrip != NULL && sHiddenStrip == vertices && sHiddenCount == count &&
+        (layer == 0 || layer == 1 || layer == 3 || layer == 5)) {
+        return;
+    }
+    if (getenv("BT3_ANIME_LOG") != NULL) {
+        /* (a line when it changes: layer 0 strips, those with anime colours, and the ramps under those, by why not
+           redrawn and by hash: what anime_ramps.txt lists) */
+        static unsigned frame, strips, anime, why[6], nr;
+        static uint32_t ramps[64];
+        static char lastLine[1200];
+        if (frame != gGsFrame) {
+            if (strips != 0) {
+                char line[1200];
+                int at = snprintf(line, sizeof(line), "shading %d, %u strips, %u with anime colours; their ramps: %u redrawn, "
+                                  "not: %u shading off, %u pack, %u text, %u no pixels, %u other; hashes", Mods_Look()->shading,
+                                  strips, anime, why[1], why[2], why[3], why[4], why[5], why[0]);
+                unsigned q;
+                for (q = 0; q < nr && at > 0 && at < (int)sizeof(line) - 16; q++) {
+                    at += snprintf(line + at, sizeof(line) - (size_t)at, " %08x/%04x", ramps[q * 2], ramps[q * 2 + 1]);
+                }
+                if (strcmp(line, lastLine) != 0) {
+                    fprintf(stderr, "anime: frame %u: %s\n", frame, line);
+                    strcpy(lastLine, line);
+                }
+            }
+            frame = gGsFrame;
+            strips = anime = nr = 0;
+            memset(why, 0, sizeof(why));
+        }
+        if (layer == 0) {
+            strips++;
+            anime += sLast != NULL && sLast->tex == d.tex && sLast->animeCount != 0;
+        }
+        if ((layer == 1 || layer == 5) && sAnimeStrip.vertices == vertices) {
+            int ok = layer == 5 || (sLast != NULL && sLast->tex == d.tex);
+            unsigned q, at = 0;
+            why[layer == 1 && ok && sLast->toonWhy >= 1 && sLast->toonWhy <= 5 ? sLast->toonWhy : 0]++;
+            if (ok) { /* (kept sorted, so the line is the same while the set is; the low bits: which texture's strip) */
+                const char *path = TexPack_Path(sAnimeStrip.entry[0]), *base = path;
+                uint32_t key, tex = 0;
+                const char *c;
+                for (c = path; c != NULL && *c; c++) {
+                    if (*c == '/' || *c == '\\') {
+                        base = c + 1;
+                    }
+                }
+                for (c = base; c != NULL && *c && *c != '-' && c - base < 4; c++) {
+                    tex = tex * 16 + (uint32_t)(*c <= '9' ? *c - '0' : (*c | 32) - 'a' + 10);
+                }
+                /* "rrrrrrrr/tttt": the ramp's hash (55555555: program 1, no ramp), the first 4 digits of the texture's name */
+                key = layer == 5 ? 0x55555555u : sLast->rampHash;
+                while (at < nr && (ramps[at * 2] < key || (ramps[at * 2] == key && ramps[at * 2 + 1] < tex))) {
+                    at++;
+                }
+                if ((at == nr || ramps[at * 2] != key || ramps[at * 2 + 1] != tex) && nr < 32) {
+                    for (q = nr; q > at; q--) {
+                        ramps[q * 2] = ramps[q * 2 - 2];
+                        ramps[q * 2 + 1] = ramps[q * 2 - 1];
+                    }
+                    ramps[at * 2] = key;
+                    ramps[at * 2 + 1] = tex;
+                    nr++;
+                }
+            }
+        }
+    }
+    if (layer == 0 || layer == 3) { /* (BT3_ANIME_LOG: which texture the strip has; ffffffff: not one of the cache's) */
+        sStripPack = sLast != NULL && sLast->tex == d.tex && !d.tex_is_target ? sLast->packName : 0xFFFFFFFFu;
+    }
+    if ((layer == 0 || layer == 3) && sLast != NULL && sLast->tex == d.tex && !d.tex_is_target && sLast->markForms != 0) {
+        /* a texture some form folder lists as its own (anime_form.txt), with or without a file there: that form is on
+           the screen, by this fighter */
+        int fo;
+        for (fo = 0; fo < 64; fo++) {
+            if (sLast->markForms & (1ull << fo)) {
+                form_mark(fo, sLast->arow);
+            }
+        }
+    }
+    if ((layer == 0 || layer == 3) && sLast != NULL && sLast->tex == d.tex && !d.tex_is_target && sLast->animeCount != 0) {
+        int f;
+        sAnimeStrip.vertices = vertices;
+        sAnimeStrip.count = count;
+        sAnimeStrip.forms = sLast->animeCount;
+        sAnimeStrip.row = sLast->arow;
+        for (f = 0; f < sLast->animeCount; f++) {
+            sAnimeStrip.anime[f] = sLast->anime[f];
+            sAnimeStrip.cut[f] = sLast->animeCut[f];
+            sAnimeStrip.entry[f] = sLast->animeEntry[f];
+            sAnimeStrip.tones[f] = sLast->animeTones[f];
+        }
+        sAnimeStrip.sampler = d.sampler;
+    }
+    if (layer == 1 && sLast != NULL && sLast->tex == d.tex && sLast->toonDir != 0.0f && !sLast->rampFlat) {
+        rampEdge = sLast->toonEdge;
+        rampDir = sLast->toonDir;
+    }
+    if (layer == 1 && sAnimeStrip.vertices == vertices && sAnimeStrip.count == count && sAnimeStrip.forms > 0 &&
+        TexPack_AnimeView(sAnimeStrip.entry[0]) != 0) {
+        /* anime_view.txt (gs_texpack.h): cut in the middle of where the surface faces across the picture (vu0.vert
+           layer 10), whatever the ramp is */
+        uint32_t uv = strip_uv_hash(vertices, count);
+        viewSide = (float)TexPack_AnimeView(sAnimeStrip.entry[0]);
+        if (TexPack_AnimeUpStrip(sAnimeStrip.entry[0], uv)) { /* anime_up.txt: this strip up and down (a head's top) */
+            viewSide = viewSide > 0.0f ? 2.0f : -2.0f;
+        }
+        rampEdge = 0.5f;
+        rampDir = -1.0f;
+        if (getenv("BT3_ANIME_LOG") != NULL) {
+            /* (once a strip: its texture coordinates' hash, what anime_up.txt lists, and where it is on the screen, to
+               tell which strips are which part) */
+            static uint32_t seen[512];
+            static unsigned nseen;
+            unsigned q;
+            for (q = 0; q < nseen && seen[q] != uv; q++) {
+            }
+            if (q == nseen && nseen < 512) {
+                const float *v = vertices, *bone = &consts[0], *piv = &consts[32], *scr = &consts[56];
+                float sx = 0.0f, sy = 0.0f;
+                uint32_t n;
+                seen[nseen++] = uv;
+                for (n = 0; n < count; n++, v += 12) {
+                    float p[4] = {v[0] - piv[0], v[1] - piv[1], v[2] - piv[2], 1.0f}, a[4], s[4];
+                    int j;
+                    for (j = 0; j < 4; j++) {
+                        a[j] = bone[j] * p[0] + bone[4 + j] * p[1] + bone[8 + j] * p[2] + bone[12 + j];
+                    }
+                    a[3] = 1.0f;
+                    for (j = 0; j < 4; j++) {
+                        s[j] = scr[j] * a[0] + scr[4 + j] * a[1] + scr[8 + j] * a[2] + scr[12 + j] * a[3];
+                    }
+                    if (s[3] != 0.0f) {
+                        sx += s[0] / s[3];
+                        sy += s[1] / s[3];
+                    }
+                }
+                fprintf(stderr, "anime: view strip %s uv %08x, %u vertices, on the screen at %.0f, %.0f%s\n",
+                        TexPack_Path(sAnimeStrip.entry[0]), uv, count, sx / (float)count, sy / (float)count,
+                        fabsf(viewSide) > 1.5f ? " (up and down)" : "");
+            }
+        }
+    }
+    if (layer == 5) { /* program 1 (the hair): no ramp; the anime pass cuts its lookup in the middle */
+        rampEdge = 0.5f;
+        rampDir = -1.0f;
+    }
+    if (layer == 3) { /* program 8 (cloth lit in its vertex colours): the anime pass cuts their brightness (vu0.vert layer 9) */
+        rampEdge = 0.4f;
+        rampDir = -1.0f;
+    }
     if (layer == 2 && d.misc[1] == 1.0f && d.misc[2] != 0.0f) {
         /* TEST.DATE rejects pixels marked by FBA. Stencil also rejects overlap within this
            draw run, which a single snapshot of the alpha buffer cannot see. */
@@ -2539,6 +3815,122 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
     gsVuUni[gsVuUniCount++] = u;
     d.object=sPresentationObject;
     gsDraws[gsDrawCount++] = d;
+    /* The anime pass (sAnimeStrip above): this strip's shading layer, with its layer 0 carrying anime colours. */
+    if ((layer == 1 || layer == 5 || layer == 3) && sAnimeStrip.vertices == vertices && sAnimeStrip.count == count &&
+        sAnimeStrip.forms > 0) {
+        form = anime_form();
+    }
+    if (getenv("BT3_ANIME_LOG") != NULL && layer != 0) {
+        /* (a line when it changes: by layer, the strips after one with anime colours and how many got the anime pass;
+           and the strips of each layer without any) */
+        static unsigned frame, after[10], drawn[10], plain[10], np;
+        static uint32_t plainTex[24]; /* (the layer 0 textures of those without, by their pack names' first 8 digits) */
+        static char lastLine[900];
+        int q;
+        if (frame != gGsFrame) {
+            char line[900];
+            int at = 0;
+            for (q = 1; q < 10 && at >= 0 && at < (int)sizeof(line) - 40; q++) {
+                if (after[q] || plain[q]) {
+                    at += snprintf(line + at, sizeof(line) - (size_t)at, " layer %d: %u after anime (%u drawn), %u other;", q, after[q],
+                                   drawn[q], plain[q]);
+                }
+            }
+            for (q = 0; q < (int)np && at >= 0 && at < (int)sizeof(line) - 12; q++) {
+                at += snprintf(line + at, sizeof(line) - (size_t)at, " %08x", plainTex[q]);
+            }
+            line[at > 0 ? at : 0] = '\0';
+            if (strcmp(line, lastLine) != 0) {
+                fprintf(stderr, "anime: frame %u:%s\n", frame, line);
+                strcpy(lastLine, line);
+            }
+            frame = gGsFrame;
+            memset(after, 0, sizeof(after));
+            memset(drawn, 0, sizeof(drawn));
+            memset(plain, 0, sizeof(plain));
+            np = 0;
+        }
+        if (layer > 0 && layer < 10) {
+            int anime = sAnimeStrip.vertices == vertices && sAnimeStrip.forms > 0;
+            after[layer] += anime;
+            drawn[layer] += anime && form >= 0 && rampDir != 0.0f && Mods_Look()->shading > 0;
+            plain[layer] += !anime;
+            if (!anime && layer == 1) { /* (kept sorted: the line is the same while the set is) */
+                unsigned at = 0, m;
+                while (at < np && plainTex[at] < sStripPack) {
+                    at++;
+                }
+                if ((at == np || plainTex[at] != sStripPack) && np < 24) {
+                    for (m = np; m > at; m--) {
+                        plainTex[m] = plainTex[m - 1];
+                    }
+                    plainTex[at] = sStripPack;
+                    np++;
+                }
+            }
+        }
+    }
+    if ((layer == 1 || layer == 5 || layer == 3) && rampDir != 0.0f && form >= 0 && Mods_Look()->shading > 0 &&
+        gsDrawCount < MAX_DRAWS && gsVuUniCount < MAX_VU_UNIFORMS) {
+        GsDraw a = d;
+        Vu0Uniform au = u;
+        uint64_t prim = gGs.prim, zbuf = gGs.zbuf[ctx], test = gGs.test[ctx];
+        anime_recent_note(TexPack_AnimeFolder(sAnimeStrip.entry[form])); /* (a fighter on the screen: anime_derive) */
+        gGs.prim = prim & ~(1ull << 6);      /* (no blending: the colour replaces what is there) */
+        gGs.zbuf[ctx] = zbuf | (1ull << 32); /* (depth not written) */
+        /* Only where this strip is what is seen (depth: nearer or the same). Layer 1 may be drawn with a looser test:
+           it multiplies, so over a nearer lock's outline it leaves the line dark; this pass replaces the colour, and
+           with that test it painted over the outlines of the locks in front (seen from the front, not from behind,
+           as the locks are drawn back to front one way and not the other). */
+        gGs.test[ctx] = (test & ~(3ull << 17)) | (1ull << 16) | (2ull << 17);
+        /* (The alpha is written, as layer 1's: where it differs from what the game left, the outline pass draws a line,
+           and that gives each lock of hair its outline, which the user wants kept; with the alpha left alone, they
+           were gone.) */
+        a.pipeline = pipeline_get(ctx, 0, 1, 0);
+        gGs.prim = prim;
+        gGs.zbuf[ctx] = zbuf;
+        gGs.test[ctx] = test;
+        a.tex = sAnimeStrip.anime[form];
+        a.tex_is_target = 0;
+        /* (sampled as the game samples layer 0, so its line art stays as sharp; clamped in v, gs.frag wraps it by
+           hand: the two halves of the anime texture must not bleed into each other) */
+        a.sampler = sAnimeStrip.sampler | 4;
+        a.mode[0] = 4;
+        a.mode[3] = 0;   /* (no alpha test: gs.frag drops what the anime texture leaves to the game) */
+        a.misc[0] = rampEdge + rampDir * sAnimeStrip.cut[form]; /* (moved towards the shadow side: more of it lit) */
+        a.misc[1] = 0.0f;
+        /* The ramp's brightest end is where layer 1 leaves the picture darkest: the lit side is the other one
+           (seen on Goku SSJ3: with the sign of toonDir as it is, the shadow fell on the side facing the light). */
+        a.orig[0] = -rampDir;
+        a.orig[1] = (sAnimeStrip.sampler & 4) ? 1.0f : 0.0f; /* the layer 0 texture clamped in v (else repeated) */
+        a.orig[2] = (float)anime_shell(); /* the inside-out outline shell left to the game (gs.frag) */
+        /* the tones in the texture (2, or 3 with a middle one: gs_texpack.h TexPack_AnimeMid), and half the middle
+           tone's width along the ramp */
+        a.rect[0] = sAnimeStrip.tones[form] == 3 ? (float)TexPack_AnimeMid(sAnimeStrip.entry[form]) / 200.0f : 0.0f;
+        a.rect[1] = (float)sAnimeStrip.tones[form];
+        a.rect[2] = a.rect[3] = 0.0f;
+        if (a.orig[2] != 0.0f && gsVuIdxCount + (count - 2) * 3 <= MAX_VU_IDX) {
+            /* A strip's triangles turn the other way every second one; listed as they come (layer 1's list), half of
+               them would face the other way on the screen. Here every second one is listed the other way round, so
+               they all face as the strip does and gs.frag can tell the shell by it. */
+            uint32_t base = gsVuVertCount - count, n;
+            a.first = gsVuIdxCount;
+            for (n = 0; n + 2 < count; n++) {
+                gsVuIdx[gsVuIdxCount++] = base + n + ((n & 1) ? 1u : 0u);
+                gsVuIdx[gsVuIdxCount++] = base + n + ((n & 1) ? 0u : 1u);
+                gsVuIdx[gsVuIdxCount++] = base + n + 2;
+            }
+            a.count = gsVuIdxCount - a.first;
+        }
+        au.misc[3] = layer == 5 ? 8.0f : layer == 3 ? 9.0f : viewSide != 0.0f ? 10.0f : 7.0f;
+        if (viewSide != 0.0f) {
+            au.light2[0] = viewSide > 0.0f ? 1.0f : -1.0f;
+            au.light2[1] = fabsf(viewSide) > 1.5f ? 1.0f : 0.0f; /* (anime_view.txt 2 / -2: up and down) */
+        }
+        a.uniform = (int)gsVuUniCount;
+        gsVuUni[gsVuUniCount++] = au;
+        gsDraws[gsDrawCount++] = a;
+    }
     /* A script mod's rim light (bt3.look): after a fighter's shading layer, in the picture itself, the same triangles
        again (layer 6 of shaders/vu0.vert): light added along the edges of the silhouette, more on the side facing
        the light, nothing written to depth. */

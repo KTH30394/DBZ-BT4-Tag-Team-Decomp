@@ -58,7 +58,28 @@ void main() {
     vec3 rgb = vColor.rgb;
     float a = vColor.a * k;
     float portraitFade = 1.0;
-    if (p.mode.x != 0) {
+    if (p.mode.x == 4) {
+        // The anime pass (gs_draw.c, vu0.vert layer 7): the texture is twice the model texture's height, its colours
+        // in the light on top, in the shadow below (gs_texpack.h); or three times, a middle tone between them. vColor.r: where this point is on the shading ramp;
+        // misc.x: the ramp's edge there, orig.x: 1 if the light is past it, -1 if before. orig.y: 1 = clamped in v.
+        // rect.y: the tones in the texture, its blocks (2: lit, shadow; 3: lit, middle, shadow, the middle one
+        // rect.x either side of the edge)
+        float s = (vColor.r - p.misc.x) * p.orig.x;
+        float blocks = p.rect.y > 2.5 ? 3.0 : 2.0;
+        float block = blocks > 2.5 ? (s >= p.rect.x ? 0.0 : s >= -p.rect.x ? 1.0 : 2.0) : (s >= 0.0 ? 0.0 : 1.0);
+        vec2 uv = vStq.xy / vStq.z;
+        float h = 0.5 / float(textureSize(tex, 0).y);
+        float v = p.orig.y > 0.5 ? clamp(uv.y, 0.0, 1.0) : fract(uv.y);
+        vec4 t = texture(tex, vec2(uv.x, clamp(v / blocks, h, 1.0 / blocks - h) + block / blocks));
+        if (t.a < 0.5) discard; // (the game's own shading kept there)
+        // The game outlines a model by drawing it a second time inside out, behind it: those triangles face the other
+        // way on the screen, and they are the line round every lock of hair (the outline pass only draws lines between
+        // parts, and a head of hair is one part). Left as the game drew them, on every model (orig.z: 1 = the shell is
+        // what faces away, 2 = what faces this way, gs_draw.c anime_shell; 0 = drawn over).
+        if ((p.orig.z > 0.5 && p.orig.z < 1.5 && !gl_FrontFacing) || (p.orig.z > 1.5 && gl_FrontFacing)) discard;
+        rgb = t.rgb * vColor.g * k;
+        a = vColor.a * k;
+    } else if (p.mode.x != 0) {
         vec2 uv = vStq.xy / vStq.z;
         if (p.misc.w != 0.0) {
             // A 2D sprite: take the texture coordinate where the GS takes it, at the whole GS pixel this fragment

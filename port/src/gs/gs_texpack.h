@@ -26,5 +26,59 @@ const char *TexPack_Path(int id);
 /* Replacement `id`'s pixels: 1 and *img (kept by the pack: valid until the next call), 0 while the file is still
    being read (in the background: ask again later), -1 if it cannot be read. */
 int TexPack_Get(int id, TexPackImage *img);
+/* Anime colours (gs_draw.c, the fighters' anime pass): "<name>.anime.png" beside the pack's names, twice the texture's
+   height, its top half the colour of each texel where the light falls, its bottom half where it does not; alpha 0
+   where the game's own shading is kept. It may have a third block below: the texture as it was (its colours), so the
+   same picture under another palette (a fighter in a fight, a flash) is known for it without having seen it before. The same name may be in several folders: forms of a fighter that share their
+   textures (Goku and his Super Saiyan forms). A folder with "anime_form.txt" is a form: its colours go on the shared
+   textures only while one of the textures it lists (their hashes, one a line: what only that form has, its hair, its
+   face) is being drawn; a folder without it is for any fighter that has those textures.
+   TexPack_AnimeFind: those for the texture of the last TexPack_Lookup, at most `max` (one a folder); none: those of the
+   same texture under another palette (the game repaints a fighter's palettes for a moment when hit or charging),
+   *other = 1. TexPack_AnimeFolder: one's folder; TexPack_AnimeFolderIsForm, TexPack_AnimeIsMarker: as above.
+   TexPack_LoadAnime reads it now (1 = read; let go with TexPack_Free). *cut: from "anime_cut.txt" in its folder (one
+   number, -100..100), how far that character's edge between light and shadow moves towards the shadow side (more of
+   it lit; below 0 towards the lit side: less of it lit). */
+int TexPack_AnimeFind(int *ids, int max, int *other);
+/* The anime entries of the same texture as `id` in its folder under every palette there (id among them): the
+   expressions of a pair of eyes, each its own palette. gs_draw.c takes the one whose original is nearest to a palette
+   it has no file for. */
+int TexPack_AnimeSiblings(int id, int *ids, int max);
+/* The anime entries of a folder, at most `max` (gs_draw.c anime_derive: a fighter's colours read from all of them) */
+int TexPack_AnimeFolderEntries(int folder, int *ids, int max);
+/* The form folders (a bit each, the first 64) whose anime_form.txt lists this texture hash: a fighter drawing it is that
+   form, also where the texture has no file in that folder (a folder of pieces several forms share, the gold of
+   Broly's three forms, told apart by each form's own face or clothes). */
+uint64_t TexPack_AnimeFoldersMarking(uint64_t tex);
+uint64_t TexPack_LastTex(void); /* the texture hash the last TexPack_Lookup worked out (its name's first part), 0 = none */
+int TexPack_AnimeFolder(int id);
+int TexPack_AnimeFolderIsForm(int folder);
+int TexPack_AnimeIsMarker(int id);
+/* One of the textures listed in its folder's "anime_hair.txt" (hashes, one a line): hair, drawn with a dark line along
+   the edge of each lock (gs.frag mode 4). */
+int TexPack_AnimeIsHair(int id);
+/* One of the textures listed in its folder's "anime_hide.txt" (hashes, one a line): a layer the game draws over a
+   model that already has its anime colours (Cell's gloss: the same triangles again, lit by a reflection map, added).
+   Its strips are not drawn at all (gs_draw.c GsGpu_DrawVu0), so the model's anime colours and lines under it show. */
+int TexPack_AnimeIsHidden(int id);
+/* One of the textures listed in its folder's "anime_gloss.txt": its strips drawn by program 1 (the second pass
+   over a part, lit by a reflection map: Freezer's purple) are not drawn; the same texture's program 0 strips (the
+   part itself, under the gloss) are, with their anime colours. For a gloss that shares its texture with the part. */
+int TexPack_AnimeIsGloss(int id);
+/* "anime_view.txt" in its folder (a number, 1 or -1, which side; empty: 1): its light and shadow split by where the
+   surface faces across the picture, as a gloss layer's reflection map splits them (Cell's), not by the light; 2 or
+   -2: up and down the picture instead (the edge between them runs across: the top of a head). 0 = none. */
+int TexPack_AnimeView(int id);
+/* "anime_up.txt" in its folder (strip hashes, one a line: BT3_ANIME_LOG's "view strip ... uv"): those strips of a
+   folder with anime_view.txt split up and down (as 2 / -2), the rest as the folder says. One part of a model that
+   shares its texture with others (Freezer's head dome, his shoulder pads). */
+int TexPack_AnimeUpStrip(int id, uint32_t uv);
+int TexPack_LoadAnime(int id, TexPackImage *img, int *cut);
+/* Three tones: a file four times the texture's height (lit, middle, shadow, the original) has a middle tone between
+   light and shadow, as wide as "anime_mid.txt" in its folder says (percent of the ramp, centred on the edge: 50 = the
+   middle tone half of it, light and shadow a quarter each; 30 without one). Only
+   the files made that way: those of two (twice or three times the height) are drawn as before. */
+int TexPack_AnimeMid(int id);
+void TexPack_Free(TexPackImage *img);
 
 #endif
