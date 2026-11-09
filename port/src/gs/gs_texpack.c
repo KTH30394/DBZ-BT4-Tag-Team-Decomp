@@ -94,6 +94,9 @@ typedef struct AnimeFolder {
     int view;          /* anime_view.txt: 1 / -1 across the picture, 2 / -2 up and down it, the sign the side; 0 = none */
     int *models;       /* anime_models.txt: the fighter models (file ids) the folder is for; none = any (TexPack_AnimeFolderAllows) */
     int modelCount, hasModels;
+    uint64_t *edgeTex; /* anime_corte.txt: textures whose light / shadow edge is fixed (TexPack_AnimeEdge), and where */
+    float *edgeAt;
+    int edgeCount;
 } AnimeFolder;
 
 /* A file of texture hashes, one a line (hexadecimal; anything after it ignored). 1 = it is there. */
@@ -172,6 +175,23 @@ static int folder_of(const char *dir) {
             if (end != line && v > 0) {
                 a->models = realloc(a->models, (size_t)(a->modelCount + 1) * sizeof(int));
                 a->models[a->modelCount++] = (int)v;
+            }
+        }
+        fclose(f);
+    }
+    snprintf(path, sizeof(path), "%sanime_corte.txt", dir);
+    f = fopen(path, "r");
+    if (f != NULL) { /* "<texture hash> <edge 0..1>" a line: BT4 ramps that put the edge elsewhere than BT3's did */
+        char line[256];
+        while (fgets(line, sizeof(line), f) != NULL) {
+            char *end, *end2 = NULL;
+            unsigned long long v = strtoull(line, &end, 16);
+            double e = end != line ? strtod(end, &end2) : -1.0;
+            if (end != line && end2 != NULL && end2 != end && e >= 0.0 && e <= 1.0) {
+                a->edgeTex = realloc(a->edgeTex, (size_t)(a->edgeCount + 1) * sizeof(uint64_t));
+                a->edgeAt = realloc(a->edgeAt, (size_t)(a->edgeCount + 1) * sizeof(float));
+                a->edgeTex[a->edgeCount] = (uint64_t)v;
+                a->edgeAt[a->edgeCount++] = (float)e;
             }
         }
         fclose(f);
@@ -779,6 +799,19 @@ int TexPack_AnimeIsGloss(int id) {
         }
     }
     return 0;
+}
+
+float TexPack_AnimeEdge(int id) {
+    int folder = TexPack_AnimeFolder(id), k;
+    if (folder < 0) {
+        return -1.0f;
+    }
+    for (k = 0; k < sFolders[folder].edgeCount; k++) {
+        if (sFolders[folder].edgeTex[k] == sEntries[id].tex) {
+            return sFolders[folder].edgeAt[k];
+        }
+    }
+    return -1.0f;
 }
 
 int TexPack_AnimeIsHidden(int id) {

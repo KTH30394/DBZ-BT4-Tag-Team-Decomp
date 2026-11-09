@@ -3825,6 +3825,13 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
     if (layer == 1 && sLast != NULL && sLast->tex == d.tex && sLast->toonDir != 0.0f && !sLast->rampFlat) {
         rampEdge = sLast->toonEdge;
         rampDir = sLast->toonDir;
+        if (sAnimeStrip.vertices == vertices && sAnimeStrip.count == count && sAnimeStrip.forms > 0) {
+            /* anime_corte.txt: the edge where the BT3 ramp of this piece had it */
+            float fixedEdge = TexPack_AnimeEdge(sAnimeStrip.entry[0]);
+            if (fixedEdge >= 0.0f) {
+                rampEdge = fixedEdge;
+            }
+        }
     }
     if (layer == 1 && sAnimeStrip.vertices == vertices && sAnimeStrip.count == count && sAnimeStrip.forms > 0 &&
         TexPack_AnimeView(sAnimeStrip.entry[0]) != 0) {

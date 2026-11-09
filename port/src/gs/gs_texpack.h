@@ -65,6 +65,9 @@ int TexPack_AnimeIsHair(int id);
    model that already has its anime colours (Cell's gloss: the same triangles again, lit by a reflection map, added).
    Its strips are not drawn at all (gs_draw.c GsGpu_DrawVu0), so the model's anime colours and lines under it show. */
 int TexPack_AnimeIsHidden(int id);
+/* "anime_corte.txt" in its folder ("<hash> <0..1>" a line): where this texture's light / shadow edge goes along its
+   ramp instead of where the ramp puts it (a BT4 ramp unlike the BT3 one of the same piece); -1 = as the ramp says. */
+float TexPack_AnimeEdge(int id);
 /* One of the textures listed in its folder's "anime_gloss.txt": its strips drawn by program 1 (the second pass
    over a part, lit by a reflection map: Freezer's purple) are not drawn; the same texture's program 0 strips (the
    part itself, under the gloss) are, with their anime colours. For a gloss that shares its texture with the part. */
