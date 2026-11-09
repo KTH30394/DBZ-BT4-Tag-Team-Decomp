@@ -816,7 +816,7 @@ int TexPack_LoadAnime(int id, TexPackImage *img, int *cut) {
         return 0;
     }
     *cut = sFolders[sEntries[id].folder].cut;
-    return load(sEntries[id].path, img);
+    return load(&sEntries[id], img); /* (BT4's load takes the entry: a file may be in a ZIP pack) */
 }
 
 int TexPack_AnimeMid(int id) {
