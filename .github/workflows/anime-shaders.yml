@@ -1,0 +1,48 @@
+name: Anime shaders (regenerate SPIR-V, DXIL, D3D9)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [anime]
+    paths: ['port/src/gs/shaders/**', '.github/workflows/anime-shaders.yml', 'port/tools/anime_regen_spirv.py']
+
+permissions:
+  contents: write
+
+jobs:
+  shaders:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - name: Line endings as in the repository (the generators hash the shader sources' bytes)
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install the Vulkan SDK (glslangValidator, spirv-cross, dxc)
+        shell: pwsh
+        run: |
+          $v = '1.3.296.0'
+          Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/$v/windows/VulkanSDK-$v-Installer.exe" -OutFile vk.exe
+          Start-Process .\vk.exe -ArgumentList '--root','C:\VulkanSDK','--accept-licenses','--default-answer','--confirm-command','install' -Wait
+          "C:\VulkanSDK\Bin" | Out-File -Append $env:GITHUB_PATH -Encoding utf8
+      - name: Regenerate
+        shell: pwsh
+        run: |
+          glslangValidator --version
+          python port/tools/anime_regen_spirv.py
+          if ($LASTEXITCODE) { exit 1 }
+          python port/tools/dx12_shaders.py --generate
+          if ($LASTEXITCODE) { exit 1 }
+          python port/tools/d3d9_shaders.py --generate
+          if ($LASTEXITCODE) { exit 1 }
+      - name: Commit the generated shaders
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add port/src/gs/generated
+          git commit -m "Generated shaders for the anime pass (SPIR-V, DXIL, D3D9)"
+          if ($LASTEXITCODE) { exit 0 }
+          git push origin HEAD:${{ github.ref_name }}
