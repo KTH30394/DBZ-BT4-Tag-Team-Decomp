@@ -2130,7 +2130,33 @@ static GsTex texture_get(int ctx, int menuHd) {
         }
         /* a ramp of one tone (light and shadow alike: the dark shell that outlines a model) is no light and shadow at
            all: the anime pass leaves what is drawn with it to the game */
-        rampFlat = hi - lo < 36;
+        {
+            /* textures/anime_plano.txt: below what lightness range (R+G+B, lowest to highest) a ramp counts as one tone.
+               36 by default; a dark part's ramp (a black belt, black hair: two near-black tones) can be narrower than
+               that and then lost its two tones. Read once. BT3_ANIME_LOG lists each new ramp's range. */
+            static int flatMax = -1;
+            static uint32_t seen[256];
+            static unsigned seenNext;
+            unsigned s;
+            if (flatMax < 0) {
+                FILE *ff = fopen("textures/anime_plano.txt", "r");
+                flatMax = 36;
+                if (ff != NULL) {
+                    if (fscanf(ff, "%d", &flatMax) != 1 || flatMax < 0 || flatMax > 765) flatMax = 36;
+                    fclose(ff);
+                }
+                fprintf(stderr, "anime: ramps with a lightness range under %d are one tone (left to the game)\n", flatMax);
+            }
+            rampFlat = (int)(hi - lo) < flatMax;
+            if (getenv("BT3_ANIME_LOG") != NULL) {
+                for (s = 0; s < 256 && seen[s] != rampHash; s++) {}
+                if (s == 256) {
+                    seen[seenNext++ & 255] = rampHash;
+                    fprintf(stderr, "anime: ramp %08x %ux%u: range %u (lightest %u, darkest %u)%s\n", rampHash, (unsigned)tw,
+                            (unsigned)th, hi - lo, hi, lo, rampFlat ? " ONE TONE: left to the game" : "");
+                }
+            }
+        }
 
     }
     if (toonSharp > 0 && !replaced && !menuText && px != NULL) {
