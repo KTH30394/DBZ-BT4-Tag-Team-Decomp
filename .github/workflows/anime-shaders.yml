@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches: [anime]
-    paths: ['port/src/gs/shaders/**', '.github/workflows/anime-shaders.yml', 'port/tools/anime_regen_spirv.py']
+    paths: ['port/src/gs/shaders/**', '.github/workflows/anime-shaders.yml', 'port/tools/anime_regen_spirv.py', 'port/tools/d3d9_shaders.py']
 
 permissions:
   contents: write

@@ -72,6 +72,9 @@ def generate(root,gen,header,manifest):
             if r.returncode:row['error']=(r.stdout+r.stderr).strip();break
         else:
             text=hlsl.read_text()
+            # SM3 has no SV_IsFrontFace: VFACE, a float whose sign is the facing (the anime pass's outline shell test)
+            text=re.sub(r'bool gl_FrontFacing\s*:\s*SV_IsFrontFace;','float gl_FrontFacing : VFACE;',text)
+            text=re.sub(r'=\s*(\w+)\.gl_FrontFacing;',r'= \1.gl_FrontFacing > 0.0;',text)
             text=re.sub(r'uniform float4 U\[20\];','uniform float4 U[20] : register(c0);',text)
             text=re.sub(r'uniform float4 Params\[(\d+)\];',r'uniform float4 Params[\1] : register(c0);',text)
             text=text.replace('uniform float4 TexSizes[3];','uniform float4 TexSizes[3] : register(c5);')
