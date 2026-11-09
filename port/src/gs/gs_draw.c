@@ -327,6 +327,12 @@ typedef struct Tex {
                                 text, 5 no pixels; 0 = not asked for as one */
 } Tex;
 static Tex sTex[MAX_TEX];
+/* For each uniform of the frame: 1 + the uniform of the layer it is a copy of (the anime pass, the rim light: the same
+   triangles again over a fighter's layer), 0 = its own. The in-between pictures give such a copy exactly what they
+   gave that layer (interp_blend_fill): blended on its own, by the plain average of the matrices instead of the layer's
+   way, it stood a little off the layer under it and the two fought for the depth, a dotted pattern on the skin and the
+   wings while moving (Kid Buu and Perfect Cell in BT4, whose in-between pictures are on by default). */
+static int sUniBase[MAX_VU_UNIFORMS];
 static uint16_t sTexBucket[TEX_BUCKETS]; /* index + 1 of a cache entry, 0 = empty (open addressing) */
 static Tex *sLast; /* the entry the previous lookup returned */
 static uint64_t sTextureBytes;
@@ -3487,6 +3493,7 @@ void GsGpu_DrawVu6(int ctx, const float *vertices, uint32_t count, const float *
         return;
     }
     d.uniform = (int)gsVuUniCount;
+    sUniBase[gsVuUniCount] = 0;
     gsVuUni[gsVuUniCount++] = u;
     d.object=sPresentationObject;
     gsDraws[gsDrawCount++] = d;
@@ -3536,6 +3543,7 @@ void GsGpu_DrawVu4(int ctx, const float *vertices, uint32_t count, const float *
         return;
     }
     d.uniform = (int)gsVuUniCount;
+    sUniBase[gsVuUniCount] = 0;
     gsVuUni[gsVuUniCount++] = u;
     d.object=sPresentationObject;
     gsDraws[gsDrawCount++] = d;
@@ -3932,6 +3940,7 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
         return;
     }
     d.uniform = (int)gsVuUniCount;
+    sUniBase[gsVuUniCount] = 0;
     gsVuUni[gsVuUniCount++] = u;
     d.object=sPresentationObject;
     gsDraws[gsDrawCount++] = d;
@@ -4109,6 +4118,7 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
             au.light2[1] = fabsf(viewSide) > 1.5f ? 1.0f : 0.0f; /* (anime_view.txt 2 / -2: up and down) */
         }
         a.uniform = (int)gsVuUniCount;
+        sUniBase[gsVuUniCount] = d.uniform + 1;
         gsVuUni[gsVuUniCount++] = au;
         gsDraws[gsDrawCount++] = a;
     }
@@ -4137,6 +4147,7 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
         u.light2[2] = (float)(lk->rim_color >> 8 & 0xFF);
         u.light2[3] = lk->rim / 100.0f * 1.4f;
         r.uniform = (int)gsVuUniCount;
+        sUniBase[gsVuUniCount] = d.uniform + 1;
         gsVuUni[gsVuUniCount++] = u;
         gsDraws[gsDrawCount++] = r;
     }
@@ -5712,6 +5723,14 @@ blend:
         } else if (part == 3) { /* only the four after the screen matrix */
             memcpy(o->boneA, c->boneA, 40 * sizeof(float));
             memcpy(o->screen, c->screen, 64);
+        }
+    }
+    /* A copy of a layer (the anime pass, the rim light: sUniBase) takes what this in-between picture gave that layer:
+       its bones, pivots, screen matrix and light (the first 60 floats), to the last bit; its own colours and misc stay. */
+    for (i = 0; i < gsVuUniCount; i++) {
+        int b = sUniBase[i] - 1;
+        if (b >= 0 && b < (int)i && sInterpBlkView[i] == sInterpView && sInterpBlkView[b] == sInterpView) {
+            memcpy(sInterpBlend[i].boneA, sInterpBlend[b].boneA, 60 * sizeof(float));
         }
     }
     if (first && getenv("BT3_INTERP_FRAMES") != NULL) { /* testing: one line per picture */
