@@ -410,6 +410,7 @@ void TexPack_Init(void) {
         sBucket[h] = i + 1;
     }
     fprintf(stderr, "bt3: texture pack: %u replacement textures in %s (%u more with a name already seen)\n", sCount - dup, root, dup);
+    fprintf(stderr, "bt4 anime: build Rev6 (anime_gloss, anime_luz, pliegues por archivo)\n");
 }
 
 int TexPack_Count(void) {
