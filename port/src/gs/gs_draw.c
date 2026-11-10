@@ -3899,14 +3899,39 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
     if (layer == 5) { /* program 1 (the hair): no ramp; the anime pass cuts its lookup in the middle */
         rampEdge = 0.5f;
         rampDir = -1.0f;
-        if (sAnimeStrip.vertices == vertices && sAnimeStrip.count == count && sAnimeStrip.forms > 0 &&
-            TexPack_AnimeLuz(sAnimeStrip.entry[0]) && sLuzFolder >= 0 &&
-            sLuzFolder == TexPack_AnimeFolder(sAnimeStrip.entry[0]) && gGsFrame - sLuzFrame <= 2u) {
-            /* anime_luz.txt: a piece the BT3 drew with program 0 (no shine): cut where the same fighter's program 0
-               pieces are cut, by the same light (vu0.vert layer 7) */
+        int listed = sAnimeStrip.vertices == vertices && sAnimeStrip.count == count && sAnimeStrip.forms > 0 &&
+                     TexPack_AnimeLuz(sAnimeStrip.entry[0]);
+        if (listed && sLuzFolder >= 0 && gGsFrame - sLuzFrame <= 2u && sLuzDir != 0.0f) {
+            /* anime_luz.txt: a piece the BT3 drew with program 0 (no shine): cut where the program 0 pieces are cut,
+               by the same light (vu0.vert layer 7). (The light of the last program 0 piece in the picture, whichever
+               folder its colours came from: a texture several folders have, the eyes, is any of them.) */
             luz = 1;
             rampEdge = sLuzEdge;
             rampDir = sLuzDir;
+        }
+        if (getenv("BT3_ANIME_LOG") != NULL && listed) {
+            static int lastState = -1;
+            int state = luz ? 1 : sLuzFolder < 0 ? 2 : sLuzDir == 0.0f ? 3 : 4;
+            if (state != lastState) {
+                fprintf(stderr, "anime: luz %s: %s (light %.2f %.2f %.2f %.2f, edge %.2f, side %.0f, %u frames old)\n",
+                        TexPack_Path(sAnimeStrip.entry[0]),
+                        state == 1 ? "by the light" : state == 2 ? "no program 0 light yet" : state == 3 ? "no side" : "light too old",
+                        sLuzLight[0], sLuzLight[1], sLuzLight[2], sLuzLight[3], sLuzEdge, sLuzDir, gGsFrame - sLuzFrame);
+                lastState = state;
+            }
+        }
+        if (getenv("BT3_ANIME_LOG") != NULL && !listed && sAnimeStrip.vertices == vertices && sAnimeStrip.forms > 0) {
+            /* (once a texture: the program 1 strips with anime colours not in anime_luz.txt, to tell which they are) */
+            static int seenP1[64];
+            static unsigned nP1;
+            unsigned q;
+            for (q = 0; q < nP1 && seenP1[q] != sAnimeStrip.entry[0]; q++) {
+            }
+            if (q == nP1 && nP1 < 64) {
+                seenP1[nP1++] = sAnimeStrip.entry[0];
+                fprintf(stderr, "anime: program 1 strip %s (%u vertices, as layer 0: %d)\n", TexPack_Path(sAnimeStrip.entry[0]),
+                        count, sAnimeStrip.count == count);
+            }
         }
     }
     if (layer == 3) { /* program 8 (cloth lit in its vertex colours): the anime pass cuts their brightness (vu0.vert layer 9) */
