@@ -4028,6 +4028,20 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
             after[layer] += anime;
             drawn[layer] += anime && form >= 0 && rampDir != 0.0f && Mods_Look()->shading > 0;
             plain[layer] += !anime;
+            if (!anime && layer == 5) {
+                /* (once a texture: a program 1 strip (a gloss pass) drawn as the game draws it, without anime colours:
+                   the layer 0 texture it has and why, to tell which piece's shine is left) */
+                static uint32_t seen5[64];
+                static unsigned n5;
+                unsigned m;
+                for (m = 0; m < n5 && seen5[m] != sStripPack; m++) {
+                }
+                if (m == n5 && n5 < 64) {
+                    seen5[n5++] = sStripPack;
+                    fprintf(stderr, "anime: program 1 plain %08x (%u vertices; layer 0 anime %d, hidden %d)\n", sStripPack, count,
+                            sAnimeStrip.vertices == vertices, sHiddenStrip == vertices);
+                }
+            }
             if (!anime && layer == 1) { /* (kept sorted: the line is the same while the set is) */
                 unsigned at = 0, m;
                 while (at < np && plainTex[at] < sStripPack) {
