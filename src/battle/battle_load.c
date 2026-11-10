@@ -441,7 +441,10 @@ s32 BtlLoad_StepChara(BtlJob *job) {
     case 0:
 #ifdef PORT
         if (gPortVariant != 0) {
-            model = Bt4_ModelFile(job->chara, job->costume, job->variant != 0);
+            /* (damaged.txt, as btl_obj.c and view_a_d.c: a transformation or a member swap loads the fighter here, and
+               without it the forced torn clothes were lost) */
+            extern int Port_ForceDamaged(int chara, int costume, int variant);
+            model = Bt4_ModelFile(job->chara, job->costume, Port_ForceDamaged(job->chara, job->costume, job->variant) != 0);
         } else
 #endif
         if (job->variant != 0) {

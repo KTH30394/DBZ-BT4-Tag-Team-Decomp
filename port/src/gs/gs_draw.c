@@ -761,7 +761,11 @@ static void texture_cache_trim(void) {
     for(i=0;i<(unsigned)gsTexCount;++i) {
         Tex *t=&sTex[i];
         if(sTextureBytes>target && gGsFrame-t->last>4) {
+            int f;
             sTextureBytes-=t->bytes;sBackend->texDestroy(t->tex);++retired;
+            /* (its anime colours too, as the MAX_TEX sweep in texture_get does: left behind, each retired face or
+               form kept its anime textures on the GPU and made them anew when seen again) */
+            for(f=0;f<t->animeCount;f++) if(t->anime[f]!=0) sBackend->texDestroy(t->anime[f]);
         } else sTex[n++]=*t;
     }
     if(retired) {gsTexCount=n;texture_cache_reindex();}
@@ -936,23 +940,23 @@ static void menu_hd_arrived(Tex *c) {
    under another palette (TexPack_AnimeFind, *other). It gets the original's anime colours with what the repaint adds
    to each texel added to them, so the flash is still seen; only where the repaint is lighter than the original nearly
    everywhere (another fighter's colours on the same texture are not a flash). */
-static struct { int id; uint32_t w, h; uint32_t *px; } sAnimeOrig[64];
+static struct { int id; uint32_t w, h; uint32_t *px; } sAnimeOrig[128];
 static unsigned sAnimeOrigNext;
 
 /* An anime file, read once (the repaints come every frame while a flash lasts: read each time, the game crawled).
    1 = *img and *cut are its own (kept here: not to be let go). */
 static int anime_held(int id, TexPackImage *img, int *cut) {
-    static struct { int id, cut; TexPackImage img; } held[64];
+    static struct { int id, cut; TexPackImage img; } held[128];
     static unsigned next;
     int k, found = -1;
-    for (k = 0; k < 64; k++) {
+    for (k = 0; k < 128; k++) {
         if (held[k].img.file != NULL && held[k].id == id) {
             found = k;
             break;
         }
     }
     if (found < 0) {
-        found = (int)(next++ & 63);
+        found = (int)(next++ & 127);
         if (held[found].img.file != NULL) {
             TexPack_Free(&held[found].img);
         }
@@ -972,7 +976,7 @@ static int anime_held(int id, TexPackImage *img, int *cut) {
 static const uint8_t *anime_original(int id, uint32_t w, uint32_t h) {
     TexPackImage img;
     int k, cut;
-    for (k = 0; k < 64; k++) {
+    for (k = 0; k < 128; k++) {
         if (sAnimeOrig[k].px != NULL && sAnimeOrig[k].id == id && sAnimeOrig[k].w == w && sAnimeOrig[k].h == h) {
             return (const uint8_t *)sAnimeOrig[k].px;
         }
@@ -1054,7 +1058,7 @@ static GsTex anime_texture(int id, int other, const uint32_t *px, uint32_t w, ui
             }
         }
     }
-    for (k = 0; k < 64; k++) {
+    for (k = 0; k < 128; k++) {
         if (sAnimeOrig[k].px != NULL && sAnimeOrig[k].id == id) {
             slot = k;
             break;
@@ -1062,7 +1066,7 @@ static GsTex anime_texture(int id, int other, const uint32_t *px, uint32_t w, ui
     }
     if (!other) {
         if (slot < 0) {
-            slot = (int)(sAnimeOrigNext++ & 63);
+            slot = (int)(sAnimeOrigNext++ & 127);
         }
         if (sAnimeOrig[slot].px == NULL || sAnimeOrig[slot].w != w || sAnimeOrig[slot].h != h) {
             free(sAnimeOrig[slot].px);
@@ -1210,7 +1214,7 @@ static int colour_cmp(const void *a, const void *b) {
 }
 
 static int anime_table(int folder) {
-    int t, ids[64], ne, e, free_slot = -1;
+    int t, ids[256], ne, e, free_slot = -1;
     AnimeColour *all = NULL;
     size_t na = 0, cap = 0, i, j;
     for (t = 0; t < 24; t++) {
@@ -1226,7 +1230,7 @@ static int anime_table(int folder) {
     }
     t = free_slot;
     sAnimeTable[t].entry = -1;
-    ne = TexPack_AnimeFolderEntries(folder, ids, 64);
+    ne = TexPack_AnimeFolderEntries(folder, ids, 256);
     for (e = 0; e < ne; e++) {
         TexPackImage img;
         int cut;
@@ -1535,11 +1539,11 @@ static int anime_derive_try(uint64_t texHash, const uint32_t *px, uint32_t w, ui
             cnt[q]++;
         }
         for (rr = 0; rr < 8 && i == w * h; rr++) {
-            int folder = sAnimeRecent[rr].folder - 1, ids[64], ne, e;
+            int folder = sAnimeRecent[rr].folder - 1, ids[256], ne, e;
             if (folder < 0 || sAnimeRecent[rr].frame + 10 < gGsFrame || !anime_form_usable(folder) || !anime_folder_ok(folder, sDeriveRow)) {
                 continue;
             }
-            ne = TexPack_AnimeFolderEntries(folder, ids, 64);
+            ne = TexPack_AnimeFolderEntries(folder, ids, 256);
             for (e = 0; e < ne; e++) {
                 TexPackImage img;
                 int cut, nb;

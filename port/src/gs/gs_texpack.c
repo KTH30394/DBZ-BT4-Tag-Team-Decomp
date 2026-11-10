@@ -648,7 +648,7 @@ static void image_free(TexPackImage *img) {
 }
 
 int TexPack_AnimeFind(int *ids, int max, int *other) {
-    int n = 0, pass;
+    int n = 0, pass, tcc;
     uint32_t i;
 
     *other = 0;
@@ -656,12 +656,15 @@ int TexPack_AnimeFind(int *ids, int max, int *other) {
         return 0;
     }
     /* pass 0: this very texture; pass 1 (none found): the same one under another palette (the game repaints a fighter's
-       palettes for a moment, a hit), one from each folder */
+       palettes for a moment, a hit), one from each folder. And as find_image does for the plain replacements (BT4):
+       none found with the texture's own TCC bit, the same picture named with the other one (tcc 1). */
+    for (tcc = 0; tcc < 2 && n == 0; tcc++)
     for (pass = 0; pass < 2 && n == 0; pass++) {
+        uint32_t want = tcc ? sLookup.bits ^ 0x4000u : sLookup.bits;
         for (i = 0; i < sAnimeCount && n < max; i++) {
             const Entry *e = &sEntries[sAnimeIds[i]];
             int k, seen = 0;
-            if (e->tex != sLookup.tex || e->bits != sLookup.bits || e->pal != sLookup.pal) {
+            if (e->tex != sLookup.tex || e->bits != want || e->pal != sLookup.pal) {
                 continue;
             }
             if (pass == 0 && e->pal && e->clut != sLookup.clutUsed && e->clut != sLookup.clutAll) {

@@ -1500,7 +1500,7 @@ static int render_thread_wanted(void) {
     extern int SDL_GetNumLogicalCPUCores(void);
     const char *e = getenv("BT3_GS_THREAD");
     const char *api = getenv("BT3_GPU_API");
-    int want = e != NULL ? atoi(e) != 0 : Port_Setting("render_thread", 1) != 0;
+    int want = e != NULL ? atoi(e) != 0 : Port_Setting("render_thread", 0) != 0; /* (as BT3: with the renderer on its own thread the game waited on it for every register write while a battle loaded, the anime files read there: a long black screen; and the fighters' rows were read there while the game wrote them) */
 #ifdef __APPLE__
     want = 0;
 #endif
