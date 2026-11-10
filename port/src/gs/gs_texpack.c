@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Texture packs: replacement textures in the naming of PCSX2's texture replacement, so packs made for the game
  * under that emulator work as they are.
  *
@@ -410,7 +410,7 @@ void TexPack_Init(void) {
         sBucket[h] = i + 1;
     }
     fprintf(stderr, "bt3: texture pack: %u replacement textures in %s (%u more with a name already seen)\n", sCount - dup, root, dup);
-    fprintf(stderr, "bt4 anime: build Rev7 (registro de las pasadas de brillo sin anime)\n");
+    fprintf(stderr, "bt4 anime: build Rev8 (brillo oculto por modelo aunque no lleve anime)\n");
 }
 
 int TexPack_Count(void) {
@@ -804,6 +804,36 @@ int TexPack_AnimeIsGloss(int id) {
     for (k = 0; k < sFolders[folder].glossCount; k++) {
         if (sFolders[folder].gloss[k] == sEntries[id].tex) {
             return 1;
+        }
+    }
+    return 0;
+}
+
+int TexPack_GlossAny(uint64_t tex) {
+    int f, k;
+    for (f = 0; f < sFolderCount; f++) {
+        for (k = 0; k < sFolders[f].glossCount; k++) {
+            if (sFolders[f].gloss[k] == tex) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+int TexPack_GlossFor(uint64_t tex, int model) {
+    int f, k;
+    if (model < 0) {
+        return 0;
+    }
+    for (f = 0; f < sFolderCount; f++) {
+        if (!sFolders[f].hasModels || !TexPack_AnimeFolderAllows(f, model)) {
+            continue;
+        }
+        for (k = 0; k < sFolders[f].glossCount; k++) {
+            if (sFolders[f].gloss[k] == tex) {
+                return 1;
+            }
         }
     }
     return 0;

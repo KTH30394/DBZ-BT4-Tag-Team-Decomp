@@ -68,6 +68,11 @@ int TexPack_AnimeIsHidden(int id);
 /* "anime_corte.txt" in its folder ("<hash> <0..1>" a line): where this texture's light / shadow edge goes along its
    ramp instead of where the ramp puts it (a BT4 ramp unlike the BT3 one of the same piece); -1 = as the ramp says. */
 float TexPack_AnimeEdge(int id);
+/* A texture name (its first part, TexPack_LastTex) that some folder's anime_gloss.txt lists; and one that the folder
+   of the fighter with file `model` lists (a folder with an anime_models.txt that has it): its program 1 strips are
+   not drawn even without anime colours on them (gs_draw.c). */
+int TexPack_GlossAny(uint64_t tex);
+int TexPack_GlossFor(uint64_t tex, int model);
 /* One of the textures listed in its folder's "anime_gloss.txt": its strips drawn by program 1 (the second pass
    over a part, lit by a reflection map: Freezer's purple) are not drawn; the same texture's program 0 strips (the
    part itself, under the gloss) are, with their anime colours. For a gloss that shares its texture with the part. */

@@ -321,6 +321,9 @@ typedef struct Tex {
     uint32_t rampHash;       /* a shading ramp: its colours as they are, a little rounded */
     int rampFlat;            /* and all one tone (an outline shell's): no anime pass over it */
     uint32_t packName;       /* (BT3_ANIME_LOG) the first 8 digits of its texture pack name, 0 = not looked up */
+    uint64_t texName;        /* its texture pack name's first part (TexPack_LastTex), 0 = not looked up */
+    int glossRow;            /* a texture some anime_gloss.txt lists: the row of the alpha table its palette has, as arow
+                                (also when it has no anime colours: its gloss pass is then not drawn either); -1 = none */
     float toonEdge, toonDir; /* a shading ramp redrawn (toon_sharpen): where its edge is (0..1 along it), and 1 if the lit
                                 side is past the edge, -1 if before it; 0 = not one */
     int toonWhy;             /* (BT3_ANIME_LOG) asked for as a ramp: 1 redrawn; not: 2 shading off, 3 a pack's, 4 taken as
@@ -1952,7 +1955,8 @@ static GsTex texture_get(int ctx, int menuHd) {
     int animeEntry[ANIME_FORMS], animeTones[ANIME_FORMS], animeRow = -1;
     uint64_t markForms = 0;
     uint32_t rampHash = 0, packName = 0;
-    int rampFlat = 0;
+    uint64_t texName = 0;
+    int rampFlat = 0, glossRow = -1;
     if (toonSharp > 0) { gen ^= 0x70017000u + (uint32_t)toonSharp * 0x9E3779B1u + (uint32_t)toonCut * 0x85EBCA77u; }
     if (sTexPackOn && TexPack_Count() != 0) {
         gen ^= 0x5BD1E995u; /* with the pack and without it are different textures: switching it takes effect at once */
@@ -2023,7 +2027,8 @@ static GsTex texture_get(int ctx, int menuHd) {
         int id = TexPack_Lookup(tbp, tbw, psm, tw, th, (uint32_t)((t0 >> 34) & 1), cbp, cpsm, &packMaxAlpha);
         int got = id >= 0 ? TexPack_Get(id, &pack) : -1;
         animeFound = sToonWanted ? 0 : TexPack_AnimeFind(animeIds, ANIME_FORMS, &animeOther);
-        packName = (uint32_t)(TexPack_LastTex() >> 32);
+        texName = TexPack_LastTex();
+        packName = (uint32_t)(texName >> 32);
         if (got > 0 && sBackend->texSlotsLeft() >= pack.levels && pack_budget_take(&pack)) {
             replaced = 1;
             gGpuTexReplaced++;
@@ -2262,6 +2267,8 @@ static GsTex texture_get(int ctx, int menuHd) {
     }
     animeRow = (animeCount != 0 || markForms != 0) && px != NULL && rw == tw && rh == th && (px[0] >> 24) < 0x80 ?
                (int)((px[0] >> 24) / 15) : -1;
+    glossRow = texName != 0 && TexPack_GlossAny(texName) && px != NULL && rw == tw && rh == th && (px[0] >> 24) < 0x80 ?
+               (int)((px[0] >> 24) / 15) : -1;
     gGpuTexNs += gpu_now() - tex_t0;
     gDrawTexNs += gpu_now() - tex_t0;
     gDrawNewTex++;
@@ -2336,6 +2343,8 @@ static GsTex texture_get(int ctx, int menuHd) {
     t->rampHash = rampHash;
     t->rampFlat = rampFlat;
     t->packName = packName;
+    t->texName = texName;
+    t->glossRow = glossRow;
     return t->tex;
 }
 
@@ -3741,9 +3750,14 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
     /* A strip whose layer 0 texture is in its anime folder's anime_hide.txt, or in anime_gloss.txt and drawn by
        program 1 (gs_texpack.h): none of its layers drawn. */
     if (layer == 0 || layer == 3) {
-        sHiddenStrip = sLast != NULL && sLast->tex == d.tex && !d.tex_is_target && sLast->animeCount != 0 &&
-                       (TexPack_AnimeIsHidden(sLast->animeEntry[0]) ||
-                        (layer == 0 && gVuProgram1 && TexPack_AnimeIsGloss(sLast->animeEntry[0]))) ? vertices : NULL;
+        sHiddenStrip = sLast != NULL && sLast->tex == d.tex && !d.tex_is_target &&
+                       ((sLast->animeCount != 0 &&
+                         (TexPack_AnimeIsHidden(sLast->animeEntry[0]) ||
+                          (layer == 0 && gVuProgram1 && TexPack_AnimeIsGloss(sLast->animeEntry[0])))) ||
+                        /* (a gloss pass of a listed texture without anime colours, Vegeta SSJ4's trousers: by the
+                           fighter's model, so only the folder of that fighter hides it) */
+                        (layer == 0 && gVuProgram1 && sLast->glossRow >= 0 &&
+                         TexPack_GlossFor(sLast->texName, anime_row_model(sLast->glossRow)))) ? vertices : NULL;
         sHiddenCount = count;
     }
     /* (its own layers only: the vertices may sit where the next program's are, a shadow's, a debris's) */
