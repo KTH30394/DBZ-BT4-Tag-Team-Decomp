@@ -72,6 +72,11 @@ float TexPack_AnimeEdge(int id);
    over a part, lit by a reflection map: Freezer's purple) are not drawn; the same texture's program 0 strips (the
    part itself, under the gloss) are, with their anime colours. For a gloss that shares its texture with the part. */
 int TexPack_AnimeIsGloss(int id);
+/* One of the textures listed in its folder's "anime_luz.txt": a piece the BT4 draws with program 1 (a shine over it)
+   where the BT3 drew it with program 0 (Vegeta SSJ4's trousers). Its anime pass splits light and shadow by the light,
+   as the program 0 pieces of the same fighter in that picture have it (vu0.vert layer 7), not by program 1's lookup
+   across the picture (layer 8, the hair's), which looked like metal. */
+int TexPack_AnimeLuz(int id);
 /* "anime_view.txt" in its folder (a number, 1 or -1, which side; empty: 1): its light and shadow split by where the
    surface faces across the picture, as a gloss layer's reflection map splits them (Cell's), not by the light; 2 or
    -2: up and down the picture instead (the edge between them runs across: the top of a head). 0 = none. */

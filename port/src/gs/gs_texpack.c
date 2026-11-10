@@ -89,6 +89,8 @@ typedef struct AnimeFolder {
     int hideCount;
     uint64_t *gloss;   /* anime_gloss.txt: textures whose program 1 pass (the gloss) is not drawn (TexPack_AnimeIsGloss) */
     int glossCount;
+    uint64_t *luz;     /* anime_luz.txt: textures whose program 1 strips split light and shadow by the light (TexPack_AnimeLuz) */
+    int luzCount;
     uint64_t *up;      /* anime_up.txt: strips (their texture coordinates' hash, gs_draw.c) split up and down */
     int upCount;
     int view;          /* anime_view.txt: 1 / -1 across the picture, 2 / -2 up and down it, the sign the side; 0 = none */
@@ -162,6 +164,8 @@ static int folder_of(const char *dir) {
     read_hashes(path, &a->hide, &a->hideCount);
     snprintf(path, sizeof(path), "%sanime_gloss.txt", dir);
     read_hashes(path, &a->gloss, &a->glossCount);
+    snprintf(path, sizeof(path), "%sanime_luz.txt", dir);
+    read_hashes(path, &a->luz, &a->luzCount);
     snprintf(path, sizeof(path), "%sanime_up.txt", dir);
     read_hashes(path, &a->up, &a->upCount);
     snprintf(path, sizeof(path), "%sanime_models.txt", dir);
@@ -815,6 +819,19 @@ float TexPack_AnimeEdge(int id) {
         }
     }
     return -1.0f;
+}
+
+int TexPack_AnimeLuz(int id) {
+    int folder = TexPack_AnimeFolder(id), k;
+    if (folder < 0) {
+        return 0;
+    }
+    for (k = 0; k < sFolders[folder].luzCount; k++) {
+        if (sFolders[folder].luz[k] == sEntries[id].tex) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int TexPack_AnimeIsHidden(int id) {

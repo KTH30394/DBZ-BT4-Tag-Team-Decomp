@@ -3573,6 +3573,11 @@ static struct {
 } sAnimeStrip;
 static uint32_t sStripPack; /* (BT3_ANIME_LOG) the texture of the last strip's layer 0: Tex.packName */
 static const float *sHiddenStrip; /* the strip whose layers are not drawn (anime_hide.txt), or NULL */
+/* The light of the last program 0 strip with the anime pass (its layer 1's light, edge and side), for the program 1
+   strips of the same folder that anime_luz.txt lists (gs_texpack.h TexPack_AnimeLuz): split by the same light. */
+static float sLuzLight[4], sLuzEdge, sLuzDir;
+static unsigned sLuzFrame;
+static int sLuzFolder = -1;
 static uint32_t sHiddenCount;     /* (and its vertex count) */
 
 /* A strip's texture coordinates as one number (FNV-1a over their bits, the vertex count in it too): the same strip of
@@ -3713,6 +3718,7 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
     Vu0Uniform u;
     GsDraw d, *last;
     float us, vs, rampEdge = -1.0f, rampDir = 0.0f, viewSide = 0.0f;
+    int luz = 0; /* (a program 1 strip split by the light: anime_luz.txt) */
     uint32_t i, k;
     int form = -1;
 
@@ -3893,6 +3899,15 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
     if (layer == 5) { /* program 1 (the hair): no ramp; the anime pass cuts its lookup in the middle */
         rampEdge = 0.5f;
         rampDir = -1.0f;
+        if (sAnimeStrip.vertices == vertices && sAnimeStrip.count == count && sAnimeStrip.forms > 0 &&
+            TexPack_AnimeLuz(sAnimeStrip.entry[0]) && sLuzFolder >= 0 &&
+            sLuzFolder == TexPack_AnimeFolder(sAnimeStrip.entry[0]) && gGsFrame - sLuzFrame <= 2u) {
+            /* anime_luz.txt: a piece the BT3 drew with program 0 (no shine): cut where the same fighter's program 0
+               pieces are cut, by the same light (vu0.vert layer 7) */
+            luz = 1;
+            rampEdge = sLuzEdge;
+            rampDir = sLuzDir;
+        }
     }
     if (layer == 3) { /* program 8 (cloth lit in its vertex colours): the anime pass cuts their brightness (vu0.vert layer 9) */
         rampEdge = 0.4f;
@@ -4132,6 +4147,18 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
             a.count = gsVuIdxCount - a.first;
         }
         au.misc[3] = layer == 5 ? 8.0f : layer == 3 ? 9.0f : viewSide != 0.0f ? 10.0f : 7.0f;
+        if (layer == 1 && viewSide == 0.0f) {
+            /* (the light a program 1 piece of this folder listed in anime_luz.txt is split by) */
+            memcpy(sLuzLight, u.light, sizeof(sLuzLight));
+            sLuzEdge = rampEdge;
+            sLuzDir = rampDir;
+            sLuzFrame = gGsFrame;
+            sLuzFolder = TexPack_AnimeFolder(sAnimeStrip.entry[form]);
+        }
+        if (luz) {
+            au.misc[3] = 7.0f;
+            memcpy(au.light, sLuzLight, sizeof(au.light));
+        }
         if (viewSide != 0.0f) {
             au.light2[0] = viewSide > 0.0f ? 1.0f : -1.0f;
             au.light2[1] = fabsf(viewSide) > 1.5f ? 1.0f : 0.0f; /* (anime_view.txt 2 / -2: up and down) */
