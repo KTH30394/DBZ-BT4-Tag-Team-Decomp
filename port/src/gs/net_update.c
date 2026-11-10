@@ -748,6 +748,7 @@ static void check_start(int manual) {
     unlock();
     if (UpdateVer_Compare(PORT_VERSION, PORT_VERSION) == -2) { /* a "dev" build: nothing to compare with */
         fprintf(stderr, "bt3: update check: this is a development build (%s): no updates are offered\n", PORT_VERSION);
+        fprintf(stderr, "bt3: anime build (BT4 audit 10-nov-2026)\n");
         SDL_SetAtomicInt(&sU.state, UPD_NONE);
         return;
     }
