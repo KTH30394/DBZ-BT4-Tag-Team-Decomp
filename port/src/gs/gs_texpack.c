@@ -442,7 +442,7 @@ void TexPack_Init(void) {
         sBucket[h] = i + 1;
     }
     fprintf(stderr, "bt3: texture pack: %u replacement textures in %s (%u more with a name already seen)\n", sCount - dup, root, dup);
-    fprintf(stderr, "bt4 anime: build Rev13 (efecto esfera: anime_esfera.txt, brillo de dos formas por carpeta)\n");
+    fprintf(stderr, "bt4 anime: build Rev13 (efecto esfera: anime_esfera.txt, color oscuro de base y brillo de dos formas del claro, por carpeta)\n");
 }
 
 int TexPack_Count(void) {
