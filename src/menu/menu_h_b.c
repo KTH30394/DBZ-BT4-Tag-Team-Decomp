@@ -389,7 +389,17 @@ void CharRef_Draw(void) {
     Flash_ClipSetScale(flash, &ref, 1.0f, scale);
     Flash_ClipSetOffset(flash, &ref, 0, y);
     c = gCharRef->costume + 1;
+#ifdef PORT
+    /* BT4 (DBZP.BIN 0x357758): up to 8 costumes. The digit is cell c of a grid of four 32x32 cells per row
+       (BT3's switch below only had 0..3, so costumes 5..8 kept showing the "4"). */
+    uv.x0 = (c & 3) << 5;
+    uv.x1 = uv.x0 + 0x20;
+    uv.y0 = (c >> 2) << 5;
+    uv.y1 = uv.y0 + 0x20;
+    switch (-1) {
+#else
     switch (c) {
+#endif
     case 0:
         uv.y0 = 0;
         uv.y1 = c + 0x20;

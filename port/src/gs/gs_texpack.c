@@ -420,7 +420,7 @@ void TexPack_Init(void) {
         sBucket[h] = i + 1;
     }
     fprintf(stderr, "bt3: texture pack: %u replacement textures in %s (%u more with a name already seen)\n", sCount - dup, root, dup);
-    fprintf(stderr, "bt4 anime: build Rev10 (museo: lista completa de 227 personajes, parche del DBZP.BIN del BT4)\n");
+    fprintf(stderr, "bt4 anime: build Rev11 (museo: 227 personajes y numero de traje hasta el 8)\n");
 }
 
 int TexPack_Count(void) {
