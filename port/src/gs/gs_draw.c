@@ -4075,7 +4075,7 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
         getenv("BT3_ANIME_LOG") != NULL) {
         /* (where on the ramp this strip's points are, by texture, every 600 frames: compare light and shadow between
            builds and games; r as vu0.vert layer 7 has it, with bone A only) */
-        static struct { uint32_t tex; unsigned n, lit, hist[20], lwN; double lw; float edge; } rs[48];
+        static struct { uint32_t tex; unsigned n, lit, hist[20], lwN, t3[3]; double lw; float edge, half; } rs[48];
         static unsigned rsCount, rsFrame;
         const char *path = TexPack_Path(sAnimeStrip.entry[form]), *base = path, *c;
         uint32_t tex = 0, n;
@@ -4123,6 +4123,13 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
                 rs[q].hist[b]++;
                 rs[q].n++;
                 rs[q].lit += ((r - (rampEdge + rampDir * sAnimeStrip.cut[form])) * -rampDir) >= 0.0f;
+                {   /* three tones (4 block file): the middle one is TexPack_AnimeMid/200 each side of the edge, as the
+                       shader gets it in a.rect[0] (Rev12: so the share of light / middle / shadow can be compared) */
+                    float half = sAnimeStrip.tones[form] == 3 ? (float)TexPack_AnimeMid(sAnimeStrip.entry[form]) / 200.0f : 0.0f;
+                    float dd = (r - (rampEdge + rampDir * sAnimeStrip.cut[form])) * -rampDir;
+                    rs[q].t3[dd >= half ? 0 : dd < -half ? 2 : 1]++;
+                    rs[q].half = half;
+                }
             }
             rs[q].lw += lw;
             rs[q].lwN++;
@@ -4143,6 +4150,14 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
                 }
                 fprintf(stderr, "anime: rstat %08x edge %.2f lit %.0f%% r p10 %.2f p50 %.2f p90 %.2f light.w %.3f (%u points)\n", rs[q].tex,
                         rs[q].edge, 100.0 * rs[q].lit / rs[q].n, p10 * 0.05, p50 * 0.05, p90 * 0.05, rs[q].lwN ? rs[q].lw / rs[q].lwN : 0.0, rs[q].n);
+                if (rs[q].half > 0.0f) {
+                    fprintf(stderr, "anime: rtones %08x edge %.3f mid %.3f claro %.1f%% medio %.1f%% oscuro %.1f%% hist", rs[q].tex, rs[q].edge,
+                            2.0f * rs[q].half, 100.0 * rs[q].t3[0] / rs[q].n, 100.0 * rs[q].t3[1] / rs[q].n, 100.0 * rs[q].t3[2] / rs[q].n);
+                    for (b = 0; b < 20; b++) {
+                        fprintf(stderr, " %u", (unsigned)(1000u * rs[q].hist[b] / rs[q].n));
+                    }
+                    fprintf(stderr, "\n");
+                }
                 memset(&rs[q], 0, sizeof(rs[q]));
             }
             rsCount = 0;
