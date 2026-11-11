@@ -68,6 +68,10 @@ int TexPack_AnimeIsHidden(int id);
 /* "anime_corte.txt" in its folder ("<hash> <0..1>" a line): where this texture's light / shadow edge goes along its
    ramp instead of where the ramp puts it (a BT4 ramp unlike the BT3 one of the same piece); -1 = as the ramp says. */
 float TexPack_AnimeEdge(int id);
+/* "anime_esfera.txt" in its folder ("<hash> <dark RRGGBB> <light RRGGBB>" a line): the sphere effect. The texels of this
+   texture whose anime colour is the dark one get, over it, a shine of two shapes in the light colour, looked up by
+   which way the surface faces the camera (gs.frag mode 4, vu0.vert), so it moves as the camera does. 1 = listed. */
+int TexPack_AnimeEsfera(int id, uint32_t *osc, uint32_t *clr);
 /* A texture name (its first part, TexPack_LastTex) that some folder's anime_gloss.txt lists; and one that the folder
    of the fighter with file `model` lists (a folder with an anime_models.txt that has it): its program 1 strips are
    not drawn even without anime colours on them (gs_draw.c). */

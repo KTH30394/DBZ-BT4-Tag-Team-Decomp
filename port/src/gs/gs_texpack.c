@@ -99,6 +99,9 @@ typedef struct AnimeFolder {
     uint64_t *edgeTex; /* anime_corte.txt: textures whose light / shadow edge is fixed (TexPack_AnimeEdge), and where */
     float *edgeAt;
     int edgeCount;
+    uint64_t *esfTex;  /* anime_esfera.txt: textures with the sphere effect (TexPack_AnimeEsfera), their dark (base) and */
+    uint32_t *esfOsc, *esfClr; /* light (the two-shape shine) colours, 0xRRGGBB */
+    int esfCount;
 } AnimeFolder;
 
 /* A file of texture hashes, one a line (hexadecimal; anything after it ignored). 1 = it is there. */
@@ -196,6 +199,25 @@ static int folder_of(const char *dir) {
                 a->edgeAt = realloc(a->edgeAt, (size_t)(a->edgeCount + 1) * sizeof(float));
                 a->edgeTex[a->edgeCount] = (uint64_t)v;
                 a->edgeAt[a->edgeCount++] = (float)e;
+            }
+        }
+        fclose(f);
+    }
+    snprintf(path, sizeof(path), "%sanime_esfera.txt", dir);
+    f = fopen(path, "r");
+    if (f != NULL) { /* "<texture hash> <dark RRGGBB> <light RRGGBB>" a line: the sphere effect (12-nov-2026, Broly) */
+        char line[256];
+        while (fgets(line, sizeof(line), f) != NULL) {
+            char *end, *end2 = NULL, *end3 = NULL;
+            unsigned long long v = strtoull(line, &end, 16);
+            unsigned long o = end != line ? strtoul(end, &end2, 16) : 0, c = end2 != NULL && end2 != end ? strtoul(end2, &end3, 16) : 0;
+            if (end != line && end2 != NULL && end2 != end && end3 != NULL && end3 != end2 && o <= 0xFFFFFFul && c <= 0xFFFFFFul) {
+                a->esfTex = realloc(a->esfTex, (size_t)(a->esfCount + 1) * sizeof(uint64_t));
+                a->esfOsc = realloc(a->esfOsc, (size_t)(a->esfCount + 1) * sizeof(uint32_t));
+                a->esfClr = realloc(a->esfClr, (size_t)(a->esfCount + 1) * sizeof(uint32_t));
+                a->esfTex[a->esfCount] = (uint64_t)v;
+                a->esfOsc[a->esfCount] = (uint32_t)o;
+                a->esfClr[a->esfCount++] = (uint32_t)c;
             }
         }
         fclose(f);
@@ -420,7 +442,7 @@ void TexPack_Init(void) {
         sBucket[h] = i + 1;
     }
     fprintf(stderr, "bt3: texture pack: %u replacement textures in %s (%u more with a name already seen)\n", sCount - dup, root, dup);
-    fprintf(stderr, "bt4 anime: build Rev12 (registro: reparto claro/medio/oscuro de las texturas de 3 capas)\n");
+    fprintf(stderr, "bt4 anime: build Rev13 (efecto esfera: anime_esfera.txt, brillo de dos formas por carpeta)\n");
 }
 
 int TexPack_Count(void) {
@@ -866,6 +888,21 @@ float TexPack_AnimeEdge(int id) {
         }
     }
     return -1.0f;
+}
+
+int TexPack_AnimeEsfera(int id, uint32_t *osc, uint32_t *clr) {
+    int folder = TexPack_AnimeFolder(id), k;
+    if (folder < 0) {
+        return 0;
+    }
+    for (k = 0; k < sFolders[folder].esfCount; k++) {
+        if (sFolders[folder].esfTex[k] == sEntries[id].tex) {
+            *osc = sFolders[folder].esfOsc[k];
+            *clr = sFolders[folder].esfClr[k];
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int TexPack_AnimeLuz(int id) {

@@ -30,6 +30,15 @@ float anime_edge(float w) {
     vec3 fwd = normalize(vec3(u.screen[0][3], u.screen[1][3], u.screen[2][3])); // (the camera's forward: the w row)
     return clamp(dot(n, fwd) * 0.5 + 0.5, 0.0, 1.0);
 }
+// The sphere effect (anime pass, gs_draw.c: target.y = 1, anime_esfera.txt): where this point's surface faces across and
+// up the picture, 0..1 each (0.5 = straight at the camera), as a reflection map is looked up; gs.frag draws the shine there.
+vec2 esfera_refl(float w) {
+    vec3 n = normalize(mix(mat3(u.boneB) * inNormal.xyz, mat3(u.boneA) * inNormal.xyz, w));
+    vec3 fwd = normalize(vec3(u.screen[0][3], u.screen[1][3], u.screen[2][3]));
+    vec3 x = vec3(u.screen[0][0], u.screen[1][0], u.screen[2][0]), y = vec3(u.screen[0][1], u.screen[1][1], u.screen[2][1]);
+    vec3 right = normalize(x - dot(x, fwd) * fwd), up = normalize(y - dot(y, fwd) * fwd);
+    return clamp(vec2(dot(n, right), dot(n, up)) * 0.5 + 0.5, 0.0, 1.0);
+}
 void main() {
     float w = u.misc.w == 4.0 ? 1.0 : inPos.w; // layer 4 (debris, rigid): the 4th word is a flag, not a weight
     vec3 pa = (u.boneA * vec4(inPos.xyz - u.pivotA.xyz, 1.0)).xyz;
@@ -108,5 +117,11 @@ void main() {
         float na = dot(u.light.xyz, mat3(u.boneA) * inNormal.xyz), nb = dot(u.light.xyz, mat3(u.boneB) * inNormal.xyz);
         vColor = u.color1 / 255.0;
         vStq = vec3((mix(nb, na, w) + u.light.w) * 0.5 + 0.5, 0.0, 1.0);
+    }
+    if (u.target.y > 0.5 && (u.misc.w == 7.0 || u.misc.w == 8.0 || u.misc.w == 10.0)) {
+        // (the sphere effect: gs.frag mode 4 does not read b, and takes the alpha from orig.w instead of a)
+        vec2 r = esfera_refl(w);
+        vColor.b = r.x;
+        vColor.a = r.y;
     }
 }

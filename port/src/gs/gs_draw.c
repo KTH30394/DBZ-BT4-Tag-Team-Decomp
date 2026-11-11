@@ -3500,6 +3500,7 @@ void GsGpu_DrawVu6(int ctx, const float *vertices, uint32_t count, const float *
     gsTargets[d.target].draws++;
     gsTargets[d.target].gen = gGsPageGen[gsTargets[d.target].fbp & 511];
     u.target[0] = lowres_now(d.target) ? (float)SCALE : 1.0f; /* (a work buffer at the PS2's resolution: target_lowres) */
+    u.target[1] = u.target[2] = u.target[3] = 0.0f; /* (target.y = 1: the sphere effect, set on the anime pass only) */
     last = gsDrawCount ? &gsDraws[gsDrawCount - 1] : NULL;
     if (last != NULL && same_state(last, &d) && memcmp(&gsVuUni[last->uniform], &u, sizeof(u)) == 0) {
         last->count += d.count;
@@ -3550,6 +3551,7 @@ void GsGpu_DrawVu4(int ctx, const float *vertices, uint32_t count, const float *
     gsTargets[d.target].draws++;
     gsTargets[d.target].gen = gGsPageGen[gsTargets[d.target].fbp & 511];
     u.target[0] = lowres_now(d.target) ? (float)SCALE : 1.0f; /* (a work buffer at the PS2's resolution: target_lowres) */
+    u.target[1] = u.target[2] = u.target[3] = 0.0f; /* (target.y = 1: the sphere effect, set on the anime pass only) */
     last = gsDrawCount ? &gsDraws[gsDrawCount - 1] : NULL;
     if (last != NULL && same_state(last, &d) && memcmp(&gsVuUni[last->uniform], &u, sizeof(u)) == 0) {
         last->count += d.count;
@@ -3992,6 +3994,7 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
     gsTargets[d.target].draws++;
     gsTargets[d.target].gen = gGsPageGen[gsTargets[d.target].fbp & 511];
     u.target[0] = lowres_now(d.target) ? (float)SCALE : 1.0f; /* (a work buffer at the PS2's resolution: target_lowres) */
+    u.target[1] = u.target[2] = u.target[3] = 0.0f; /* (target.y = 1: the sphere effect, set on the anime pass only) */
     last = gsDrawCount ? &gsDraws[gsDrawCount - 1] : NULL;
     if (last != NULL && same_state(last, &d) && memcmp(&gsVuUni[last->uniform], &u, sizeof(u)) == 0) {
         last->count += d.count;
@@ -4230,6 +4233,18 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
         if (viewSide != 0.0f) {
             au.light2[0] = viewSide > 0.0f ? 1.0f : -1.0f;
             au.light2[1] = fabsf(viewSide) > 1.5f ? 1.0f : 0.0f; /* (anime_view.txt 2 / -2: up and down) */
+        }
+        {
+            /* The sphere effect (anime_esfera.txt, 12-nov-2026): the texels in the dark colour get the two-shape shine in
+               the light one, looked up by the surface's direction against the camera (vu0.vert puts it in vColor.b / a,
+               so the alpha comes as orig.w here; gs.frag mode 4). rect.z = dark + 1, rect.w = light, as whole numbers. */
+            uint32_t osc, clr;
+            if (TexPack_AnimeEsfera(sAnimeStrip.entry[form], &osc, &clr)) {
+                a.rect[2] = (float)osc + 1.0f;
+                a.rect[3] = (float)clr;
+                a.orig[3] = au.color1[3] / 255.0f;
+                au.target[1] = 1.0f;
+            }
         }
         a.uniform = (int)gsVuUniCount;
         sUniBase[gsVuUniCount] = d.uniform + 1;

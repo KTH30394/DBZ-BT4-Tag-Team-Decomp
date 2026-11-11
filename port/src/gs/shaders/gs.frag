@@ -25,6 +25,35 @@ layout(set = 3, binding = 0) uniform Params {
 // 1.0 where v is not negative
 vec2 step2(vec2 v) { return vec2(v.x >= 0.0 ? 1.0 : 0.0, v.y >= 0.0 ? 1.0 : 0.0); }
 
+// The sphere effect (anime_esfera.txt, 12-nov-2026): a colour 0xRRGGBB kept as a whole number in a float
+vec3 esf_rgb(float v) {
+    float r = floor(v / 65536.0), g = floor((v - r * 65536.0) / 256.0);
+    return vec3(r, g, v - r * 65536.0 - g * 256.0) / 255.0;
+}
+// how much of a band of radius r0..r1 round c (in the 64 x 64 texels of Syn / Omega Shenron's reflection, aab98431)
+float esf_band(vec2 q, vec2 c, float r0, float r1, float aa) {
+    float d = length(q - c);
+    return (1.0 - smoothstep(r1 - aa, r1 + aa, d)) * smoothstep(r0 - aa, r0 + aa, d);
+}
+// The shine: the two shapes of that reflection, measured off it (a ball with a tail curling up on the right, a crescent
+// with a bulb on the left), at uv = where the surface faces the camera (vu0.vert esfera_refl). 0..1.
+float esf_shape(vec2 uv, float aa) {
+    vec2 q = vec2(uv.x, 1.0 - uv.y) * 64.0;
+    float m = 1.0 - smoothstep(10.5 - aa, 10.5 + aa, length(q - vec2(44.0, 34.0)));        // the ball
+    vec2 t = q - vec2(44.0, 34.0);
+    float a = degrees(atan(t.y, t.x));                                                     // (y down: -90 = up)
+    float f = clamp((a + 95.0) / 70.0, 0.0, 1.0), r = mix(19.5, 12.5, f);                 // its tail, -95..-25 degrees
+    float tail = (a > -97.0 && a < -22.0) ? esf_band(q, vec2(44.0, 34.0), r - 1.8, r + 1.8, aa) : 0.0;
+    m = max(m, tail);
+    m = max(m, 1.0 - smoothstep(7.0 - aa, 7.0 + aa, length(q - vec2(15.5, 22.0))));       // the crescent's bulb
+    vec2 s = q - vec2(32.9, 30.6);
+    float b = degrees(atan(s.y, s.x));
+    if (b < 0.0) b += 360.0;                                                               // 52 (the tip) .. 206 (the bulb)
+    float th = mix(1.8, 2.6, smoothstep(52.0, 80.0, b));                                   // (thinner towards the tip)
+    float cres = (b > 50.0 && b < 208.0) ? esf_band(q, vec2(32.9, 30.6), 22.0 - th, 22.0 + th, aa) : 0.0;
+    return max(m, cres);
+}
+
 #ifdef GS_BLOCK
 // A work buffer read as the GS reads it at 1x (mode.x == 2, orig.x = output texels per GS texel): the bilinear
 // filter between whole GS texels, each the average of its block, taken by four filtered reads a quarter of a GS
@@ -77,8 +106,21 @@ void main() {
         // parts, and a head of hair is one part). Left as the game drew them, on every model (orig.z: 1 = the shell is
         // what faces away, 2 = what faces this way, gs_draw.c anime_shell; 0 = drawn over).
         if ((p.orig.z > 0.5 && p.orig.z < 1.5 && !gl_FrontFacing) || (p.orig.z > 1.5 && gl_FrontFacing)) discard;
-        rgb = t.rgb * vColor.g * k;
-        a = vColor.a * k;
+        if (p.rect.z > 0.5) {
+            // The sphere effect (gs_draw.c: rect.z = dark + 1, rect.w = light): the texels in the dark colour show the
+            // two-shape shine in the light one; vColor.b / a carry where the surface faces (vu0.vert), the alpha is orig.w.
+            vec3 osc = esf_rgb(p.rect.z - 1.0);
+            if (all(lessThan(abs(t.rgb - osc), vec3(1.5 / 255.0)))) {
+                vec2 ruv = vec2(vColor.b, vColor.a);
+                float aa = clamp(length(fwidth(ruv)) * 64.0, 0.35, 2.0);
+                t.rgb = mix(osc, esf_rgb(p.rect.w), esf_shape(ruv, aa));
+            }
+            rgb = t.rgb * vColor.g * k;
+            a = p.orig.w * k;
+        } else {
+            rgb = t.rgb * vColor.g * k;
+            a = vColor.a * k;
+        }
     } else if (p.mode.x != 0) {
         vec2 uv = vStq.xy / vStq.z;
         if (p.misc.w != 0.0) {
