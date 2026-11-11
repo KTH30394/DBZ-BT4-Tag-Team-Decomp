@@ -2185,8 +2185,7 @@ typedef struct {
     char unk0[0x18];
     uint32_t GAME_PTR text[4];          /* 0x18: names, forms, voice labels, profiles */
     char unk28[0x190 - 0x28];
-    A11yCharRefEntry entry[161];        /* 0x190: in list order */
-    char unkE24[0x15DC - 0xE24];
+    char unk190[0x15DC - 0x190];        /* 0x190: BT3's list, unused by BT4 */
     int cursor;                         /* 0x15DC: list index of the current character */
     int count;                          /* 0x15E0: listed characters */
     int total;                          /* 0x15E4 */
@@ -2195,11 +2194,14 @@ typedef struct {
     int menuCursor;                     /* 0x15FC: item of the page's menu, 5 while the model is shown */
     char unk1600[0x1628 - 0x1600];
     int state;                          /* 0x1628: CHARREF_ST_ */
+    char unk162C[0x1638 - 0x162C];
+    A11yCharRefEntry entry[248];        /* 0x1638: BT4's list, in list order (menu_h.h) */
 } A11yCharRef;
 LAYOUT_ASSERT(sizeof(A11yCharRefEntry) == 0x14 && offsetof(A11yCharRef, cursor) == 0x15DC, "CharRef");
 LAYOUT_ASSERT(offsetof(A11yCharRef, menuCursor) == 0x15FC && offsetof(A11yCharRef, state) == 0x1628, "CharRef");
+LAYOUT_ASSERT(offsetof(A11yCharRef, entry) == 0x1638, "CharRef");
 extern A11yCharRef GAME_PTR gCharRef; /* NULL outside the screen */
-#define CHARREF_CHARA_MAX 161
+#define CHARREF_CHARA_MAX 227
 #define CHARREF_ITEMS 4
 #define CHARREF_ST_INTRO 0
 #define CHARREF_ST_LIST 1

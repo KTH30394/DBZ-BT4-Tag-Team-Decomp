@@ -66,8 +66,14 @@ extern MCommonRes *gCommonRes;
 /* ---- CharRef (menu_h_b.c): the character reference with Chi-Chi's comments (mode 60) ---- */
 
 #define CHARREF_FLASH_NUM 1
-#define CHARREF_CHARA_MAX 161
-#define CHARREF_ROWS 4            /* list rows the cursor can be on */
+/* BT4 (DBZP.BIN of the BT4 disc, CharRef_Init 0x35685C): 227 list positions instead of BT3's 161, and the list
+   entries moved to the end of the work area (0x1638, 248 slots; Heap_Alloc 0x29AC). BT3 had 161 entries at 0x190. */
+#define CHARREF_CHARA_MAX 227
+#define CHARREF_ENTRY_SLOTS 248
+#define CHARREF_BT3_ENTRIES 161
+/* BT4's unlock rule (code cave 0x3BF1FC called from CharRef_BuildList): ids from 0xA5 on are always listed. */
+#define CHARREF_BT4_FIRST_NEW 0xA5
+#define CHARREF_ROWS 4           /* list rows the cursor can be on */
 #define CHARREF_VOICE_BASE 0x82B7
 
 /* One listed (unlocked) character; the entries are a doubly linked list in list order. */
@@ -103,7 +109,7 @@ typedef struct CharRef {
     /* 0x00A0 */ u8 *tex[44];
     /* 0x0150 */ u8 unk150[0x3C];
     /* 0x018C */ CharRefEntry *head; /* first listed character */
-    /* 0x0190 */ CharRefEntry entry[CHARREF_CHARA_MAX];
+    /* 0x0190 */ CharRefEntry entryBt3[CHARREF_BT3_ENTRIES]; /* BT3's list; unused by BT4 (see entry) */
     /* 0x0E24 */ s32 *charaTbl;      /* section 17: character id per list position, negative = skipped */
     /* 0x0E28 */ s32 *commentTbl;    /* section 26: first comment line per list position */
     /* 0x0E2C */ s32 *commentNumTbl; /* section 28: comment line count per list position */
@@ -132,7 +138,8 @@ typedef struct CharRef {
     /* 0x162C */ s32 prevState;
     /* 0x1630 */ s32 flags;          /* CHARREF_ */
     /* 0x1634 */ f32 imageAlpha;
-} CharRef; /* 0x1638 */
+    /* 0x1638 */ CharRefEntry entry[CHARREF_ENTRY_SLOTS]; /* BT4: the list, in list order */
+} CharRef; /* 0x29AC */
 
 #define CHARREF_IMAGE_CHANGE 1   /* the current character changed: load its picture */
 #define CHARREF_IMAGE_READY 2    /* the picture is loaded and fades in */

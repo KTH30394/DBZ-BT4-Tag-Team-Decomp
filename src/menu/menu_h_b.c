@@ -47,8 +47,8 @@ void CharRef_Init(s32 section) {
     s32 *table;
     s32 i;
 
-    gCharRef = Heap_Alloc(0x1638, 0x20, 0, 2);
-    memset(gCharRef, 0, 0x1638);
+    gCharRef = Heap_Alloc(0x29AC, 0x20, 0, 2); /* BT4: 0x1638 + the moved list (menu_h.h) */
+    memset(gCharRef, 0, 0x29AC);
     gCharRef->pack = (u32 *)MPACK_AT(gMenuArc9, section);
     gCharRef->res = Sprite_Unpack(gCharRef->pack, NULL, NULL);
     CR_RES(15);
@@ -829,7 +829,8 @@ void CharRef_BuildList(void) {
         }
         /* The quotient is never used: only the divide-by-zero check of the division is left in the code, once
            in each arm (dividend and operator are a guess; the divisor is a variable holding 3). */
-        if (!(s32)((gSaveData->charaBits[chara >> 6] >> (chara - ((chara >> 6) << 6))) & 1)) {
+        if (chara < CHARREF_BT4_FIRST_NEW &&
+            !(s32)((gSaveData->charaBits[chara >> 6] >> (chara - ((chara >> 6) << 6))) & 1)) {
             s32 perPage = 3;
 
             page = i / perPage;
