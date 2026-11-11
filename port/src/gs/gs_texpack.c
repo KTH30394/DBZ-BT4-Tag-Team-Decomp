@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Texture packs: replacement textures in the naming of PCSX2's texture replacement, so packs made for the game
  * under that emulator work as they are.
  *
@@ -238,6 +238,7 @@ static int find_image(uint64_t tex, uint64_t clut, uint32_t bits, int pal) {
 }
 
 /* "1dd4c76113969303-56e3d4469d2ad392-00005e54.dds" (or "....anime.png": TexPack_AnimeFind) */
+static int sOnlyAnime; /* (TexPack_Init) the managed HD archive is the pack: from the folder only the anime colours */
 static void add(const char *dir, const char *name, int archive, mz_uint member) {
     size_t n = strlen(name), stem;
     char part[3][20];
@@ -252,6 +253,9 @@ static void add(const char *dir, const char *name, int archive, mz_uint member) 
     if (n > 14 && SDL_strcasecmp(name + n - 10, ".anime.png") == 0) {
         anime = 1;
         stem = n - 10;
+    }
+    if (sOnlyAnime && !anime && archive < 0) {
+        return;
     }
     for (i = 0; i < stem; i++) {
         char c = name[i];
@@ -339,7 +343,7 @@ static SDL_EnumerationResult SDLCALL walk(void *userdata, const char *dir, const
         SDL_EnumerateDirectory(path, walk, NULL);
     } else {
         size_t len=strlen(name);
-        if(len>4&&SDL_strcasecmp(name+len-4,".zip")==0)add_zip(path);
+        if(len>4&&SDL_strcasecmp(name+len-4,".zip")==0){ if(!sOnlyAnime)add_zip(path); }
         else add(dir, name, -1, 0);
     }
     free(path);
@@ -381,8 +385,14 @@ void TexPack_Init(void) {
         /* The managed R3 archive replaces the preceding pack as a whole.
            Leave other files intact, but do not mix their missing entries into
            the selected pack. Portuguese profile overrides remain isolated. */
-        if(SDL_GetPathInfo(selected,&selectedInfo)&&selectedInfo.type==SDL_PATHTYPE_FILE)
+        if(SDL_GetPathInfo(selected,&selectedInfo)&&selectedInfo.type==SDL_PATHTYPE_FILE){
             add_zip(selected);
+            /* (anime: the folders' .anime.png and their .txt still count with the HD pack; other loose textures
+               stay out of it, as the pack's authors want; zips in the folder too) */
+            sOnlyAnime=1;
+            SDL_EnumerateDirectory(dir, walk, NULL);
+            sOnlyAnime=0;
+        }
         else SDL_EnumerateDirectory(dir, walk, NULL);
     }
     free(dir);
@@ -410,7 +420,7 @@ void TexPack_Init(void) {
         sBucket[h] = i + 1;
     }
     fprintf(stderr, "bt3: texture pack: %u replacement textures in %s (%u more with a name already seen)\n", sCount - dup, root, dup);
-    fprintf(stderr, "bt4 anime: build Rev8 (brillo oculto por modelo aunque no lleve anime)\n");
+    fprintf(stderr, "bt4 anime: build Rev9 (rampas propias en ataques 0x40000; anime con pack HD)\n");
 }
 
 int TexPack_Count(void) {
@@ -759,6 +769,12 @@ int TexPack_AnimeAnyModels(void) {
         }
     }
     return 0;
+}
+
+/* 1 = there are anime folders: the game's code then keeps each fighter's own shading ramps where the BT4 swaps in
+   the light file's common one (src/sys/gfxm_d_c.c, flag 0x40000), as the BT3 does */
+int Port_AnimeOwnRamps(void) {
+    return sFolderCount > 0;
 }
 
 int TexPack_AnimeFolderIsForm(int folder) {

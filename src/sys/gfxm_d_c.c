@@ -328,10 +328,22 @@ void ObjDraw_UploadTextures(ObjDrawObj *obj) {
             BtlObjLight_FindRes1(mdl->model->clutTbp + j * 4);
         }
     } else if (obj->state.flags & 0x40000) {
+#ifdef PORT
+        /* anime colours: the fighter's own shading ramps, as the BT3 uploads them here (the BT4's common ramp of the
+           light file moved the light / shadow edge for a moment in these techniques: skin and shadow wrong) */
+        extern int Port_AnimeOwnRamps(void);
+        if (Port_AnimeOwnRamps()) {
+            for (j = 0; j < obj->mdl.model->clutCount; j++) {
+                TexFile_UploadRange(obj->mdl.tex, mdl->model->clutFirst, mdl->model->clutCount, mdl->model->clutTbp, -1);
+            }
+        } else
+#endif
+        {
         typedef struct { Vec4 dir, half, color; TexFile *res; } Bt4DrawLight;
         extern Bt4DrawLight *BtlObjLight_Get(void);
         for (j = 0; j < obj->mdl.model->clutCount; j++) {
             TexFile_UploadOne(BtlObjLight_Get()->res, 2, mdl->model->clutTbp + j * 4, -1);
+        }
         }
     } else if (obj->state.flags & 0x400000) {
         for (j = 0; j < obj->mdl.model->clutCount; j++) {
