@@ -102,6 +102,9 @@ typedef struct AnimeFolder {
     uint64_t *esfTex;  /* anime_esfera.txt: textures with the sphere effect (TexPack_AnimeEsfera), their dark (base) and */
     uint32_t *esfOsc, *esfClr; /* light (the two-shape shine) colours, 0xRRGGBB */
     int esfCount;
+    uint64_t *capTex;  /* anime_capas.txt: textures of 4 or 5 tones (TexPack_AnimeCapas) and the widths of their middle */
+    int (*capW)[3];    /* tones, in percent of the ramp, from the lit side (2 for 4 tones, 3 for 5) */
+    int *capN, capCount;
 } AnimeFolder;
 
 /* A file of texture hashes, one a line (hexadecimal; anything after it ignored). 1 = it is there. */
@@ -218,6 +221,43 @@ static int folder_of(const char *dir) {
                 a->esfTex[a->esfCount] = (uint64_t)v;
                 a->esfOsc[a->esfCount] = (uint32_t)o;
                 a->esfClr[a->esfCount++] = (uint32_t)c;
+            }
+        }
+        fclose(f);
+    }
+    snprintf(path, sizeof(path), "%sanime_capas.txt", dir);
+    f = fopen(path, "r");
+    if (f != NULL) { /* "<texture hash> <w1> <w2> [<w3>]" a line: 4 tones (two middle ones) or 5 (three), 12-nov-2026 */
+        char line[256];
+        while (fgets(line, sizeof(line), f) != NULL) {
+            char *end, *p;
+            int w[3] = {0, 0, 0}, k = 0, ok = 1;
+            unsigned long long v = strtoull(line, &end, 16);
+            if (end == line) {
+                continue;
+            }
+            p = end;
+            while (k < 3) {
+                char *e2;
+                long x = strtol(p, &e2, 10);
+                if (e2 == p) {
+                    break;
+                }
+                if (x < 0 || x > 99) {
+                    ok = 0;
+                }
+                w[k++] = (int)x;
+                p = e2;
+            }
+            if (ok && k >= 2 && w[0] + w[1] + w[2] <= 100) {
+                a->capTex = realloc(a->capTex, (size_t)(a->capCount + 1) * sizeof(uint64_t));
+                a->capW = realloc(a->capW, (size_t)(a->capCount + 1) * sizeof(*a->capW));
+                a->capN = realloc(a->capN, (size_t)(a->capCount + 1) * sizeof(int));
+                a->capTex[a->capCount] = (uint64_t)v;
+                a->capW[a->capCount][0] = w[0];
+                a->capW[a->capCount][1] = w[1];
+                a->capW[a->capCount][2] = k == 3 ? w[2] : 0;
+                a->capN[a->capCount++] = k;
             }
         }
         fclose(f);
@@ -442,7 +482,7 @@ void TexPack_Init(void) {
         sBucket[h] = i + 1;
     }
     fprintf(stderr, "bt3: texture pack: %u replacement textures in %s (%u more with a name already seen)\n", sCount - dup, root, dup);
-    fprintf(stderr, "bt4 anime: build Rev13 (efecto esfera: anime_esfera.txt, color oscuro de base y brillo de dos formas del claro, por carpeta)\n");
+    fprintf(stderr, "bt4 anime: build Rev14 (4 y 5 capas: anime_capas.txt; efecto esfera)\n");
 }
 
 int TexPack_Count(void) {
@@ -888,6 +928,22 @@ float TexPack_AnimeEdge(int id) {
         }
     }
     return -1.0f;
+}
+
+int TexPack_AnimeCapas(int id, int w[3]) {
+    int folder = TexPack_AnimeFolder(id), k;
+    if (folder < 0) {
+        return 0;
+    }
+    for (k = 0; k < sFolders[folder].capCount; k++) {
+        if (sFolders[folder].capTex[k] == sEntries[id].tex) {
+            w[0] = sFolders[folder].capW[k][0];
+            w[1] = sFolders[folder].capW[k][1];
+            w[2] = sFolders[folder].capW[k][2];
+            return sFolders[folder].capN[k];
+        }
+    }
+    return 0;
 }
 
 int TexPack_AnimeEsfera(int id, uint32_t *osc, uint32_t *clr) {

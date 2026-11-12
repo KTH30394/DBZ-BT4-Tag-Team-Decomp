@@ -72,6 +72,11 @@ float TexPack_AnimeEdge(int id);
    texture whose anime colour is the dark one get, over it, a shine of two shapes in the light colour, looked up by
    which way the surface faces the camera (gs.frag mode 4, vu0.vert), so it moves as the camera does. 1 = listed. */
 int TexPack_AnimeEsfera(int id, uint32_t *osc, uint32_t *clr);
+/* "anime_capas.txt" in its folder ("<hash> <w1> <w2> [<w3>]" a line): a texture of 4 tones (two middle ones) or 5 (three),
+   its file 5 or 6 blocks (the tones from the lit side, then the original); w = the middle tones' widths in percent of the
+   ramp, from the lit side, together centred on the edge. Returns how many middle tones (2 or 3), 0 = not listed (2 or 3
+   tones as the file's height says, as before). */
+int TexPack_AnimeCapas(int id, int w[3]);
 /* A texture name (its first part, TexPack_LastTex) that some folder's anime_gloss.txt lists; and one that the folder
    of the fighter with file `model` lists (a folder with an anime_models.txt that has it): its program 1 strips are
    not drawn even without anime colours on them (gs_draw.c). */

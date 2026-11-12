@@ -987,6 +987,12 @@ static const uint8_t *anime_original(int id, uint32_t w, uint32_t h) {
     if (!anime_held(id, &img, &cut) || img.format != GS_TEXFMT_RGBA8 || img.w != w) {
         return NULL;
     }
+    {
+        int cw[3], cn = TexPack_AnimeCapas(id, cw); /* (4 or 5 tones: 5 or 6 blocks, the original last) */
+        if (cn > 0) {
+            return img.h == (uint32_t)(cn + 3) * h ? img.data[0] + (size_t)w * h * (cn + 2) * 4 : NULL;
+        }
+    }
     return img.h == 4 * h ? img.data[0] + (size_t)w * h * 3 * 4 : img.h == 3 * h ? img.data[0] + (size_t)w * h * 2 * 4 : NULL;
 }
 
@@ -1086,11 +1092,22 @@ static GsTex anime_texture(int id, int other, const uint32_t *px, uint32_t w, ui
     if (!anime_held(id, &img, &c)) {
         return 0;
     }
-    if (img.format != GS_TEXFMT_RGBA8 || img.w != w || (img.h != 2 * h && img.h != 3 * h && img.h != 4 * h)) {
-        return 0;
+    {
+        int cw[3], cn = TexPack_AnimeCapas(id, cw);
+        if (cn > 0) {
+            /* anime_capas.txt: 4 or 5 tones, 5 or 6 blocks (the tones from the lit side, then the original) */
+            if (img.format != GS_TEXFMT_RGBA8 || img.w != w || img.h != (uint32_t)(cn + 3) * h) {
+                return 0;
+            }
+            n = cn + 2;
+        } else {
+            if (img.format != GS_TEXFMT_RGBA8 || img.w != w || (img.h != 2 * h && img.h != 3 * h && img.h != 4 * h)) {
+                return 0;
+            }
+            /* Four blocks: three tones (lit, middle, shadow) and the original (gs_texpack.h, TexPack_AnimeMid) */
+            n = img.h == 4 * h ? 3 : 2;
+        }
     }
-    /* Four blocks: three tones (lit, middle, shadow) and the original (gs_texpack.h, TexPack_AnimeMid) */
-    n = img.h == 4 * h ? 3 : 2;
     /* A block under the colours (gs_texpack.h): the texture as it was when its anime colours were made. Only the
        colours are uploaded. */
     if (img.h == (uint32_t)(n + 1) * h) {
@@ -1241,12 +1258,20 @@ static int anime_table(int folder) {
         if (!TexPack_LoadAnime(ids[e], &img, &cut)) {
             continue;
         }
-        /* (a texture's height is a power of two: three blocks of one, or four) */
+        /* (a texture's height is a power of two: three blocks of one, or four; five or six for the textures that
+           anime_capas.txt lists) */
         w = img.w;
-        h = img.h / 3;
-        blocks = img.h % 3 == 0 && h != 0 && (h & (h - 1)) == 0 ? 3 : 4;
+        {
+            int cw[3], cn = TexPack_AnimeCapas(ids[e], cw);
+            if (cn > 0) {
+                blocks = (uint32_t)cn + 3;
+            } else {
+                h = img.h / 3;
+                blocks = img.h % 3 == 0 && h != 0 && (h & (h - 1)) == 0 ? 3 : 4;
+            }
+        }
         h = img.h / blocks;
-        if (blocks == 4 && (h == 0 || (h & (h - 1)) != 0 || h * 4 != img.h)) {
+        if (blocks >= 4 && (h == 0 || (h & (h - 1)) != 0 || h * blocks != img.h)) {
             TexPack_Free(&img);
             continue;
         }
@@ -1552,11 +1577,16 @@ static int anime_derive_try(uint64_t texHash, const uint32_t *px, uint32_t w, ui
                 int cut, nb;
                 const uint8_t *orig;
                 uint32_t fc[256], nf = 0, q, j, err = 0, worstBig = 0;
+                int cw[3], cn;
                 if (TexPack_AnimeIsHidden(ids[e]) || TexPack_AnimeIsGloss(ids[e]) || !anime_held(ids[e], &img, &cut) ||
-                    img.format != GS_TEXFMT_RGBA8 || img.w != w || (img.h != 3 * h && img.h != 4 * h)) {
+                    img.format != GS_TEXFMT_RGBA8 || img.w != w) {
                     continue;
                 }
-                nb = img.h == 4 * h ? 4 : 3;
+                cn = TexPack_AnimeCapas(ids[e], cw);
+                if (cn > 0 ? img.h != (uint32_t)(cn + 3) * h : (img.h != 3 * h && img.h != 4 * h)) {
+                    continue;
+                }
+                nb = cn > 0 ? cn + 3 : img.h == 4 * h ? 4 : 3;
                 orig = img.data[0] + (size_t)w * h * (nb - 1) * 4;
                 for (j = 0; j < w * h && nf < 256; j++) {
                     uint32_t key = (uint32_t)orig[j * 4] << 16 | (uint32_t)orig[j * 4 + 1] << 8 | orig[j * 4 + 2];
@@ -4203,6 +4233,13 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
            tone's width along the ramp */
         a.rect[0] = sAnimeStrip.tones[form] == 3 ? (float)TexPack_AnimeMid(sAnimeStrip.entry[form]) / 200.0f : 0.0f;
         a.rect[1] = (float)sAnimeStrip.tones[form];
+        if (sAnimeStrip.tones[form] >= 4) {
+            /* 4 or 5 tones (anime_capas.txt): the middle tones' widths in percent, from the lit side, as one whole number
+               1000000 + w1 * 10000 + w2 * 100 + w3 (gs.frag mode 4) */
+            int cw[3] = {0, 0, 0};
+            TexPack_AnimeCapas(sAnimeStrip.entry[form], cw);
+            a.rect[0] = 1000000.0f + (float)(cw[0] * 10000 + cw[1] * 100 + cw[2]);
+        }
         a.rect[2] = a.rect[3] = 0.0f;
         if (a.orig[2] != 0.0f && gsVuIdxCount + (count - 2) * 3 <= MAX_VU_IDX) {
             /* A strip's triangles turn the other way every second one; listed as they come (layer 1's list), half of

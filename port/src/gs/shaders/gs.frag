@@ -94,8 +94,16 @@ void main() {
         // rect.y: the tones in the texture, its blocks (2: lit, shadow; 3: lit, middle, shadow, the middle one
         // rect.x either side of the edge)
         float s = (vColor.r - p.misc.x) * p.orig.x;
-        float blocks = p.rect.y > 2.5 ? 3.0 : 2.0;
+        float blocks = clamp(floor(p.rect.y + 0.5), 2.0, 5.0);
         float block = blocks > 2.5 ? (s >= p.rect.x ? 0.0 : s >= -p.rect.x ? 1.0 : 2.0) : (s >= 0.0 ? 0.0 : 1.0);
+        if (blocks > 3.5) {
+            // 4 or 5 tones (anime_capas.txt, 12-nov-2026): rect.x = 1000000 + w1 * 10000 + w2 * 100 + w3, the middle tones'
+            // widths in percent of the ramp from the lit side, together centred on the edge
+            float wv = p.rect.x - 1000000.0;
+            float w1 = floor(wv / 10000.0), w2 = floor((wv - w1 * 10000.0) / 100.0), w3 = wv - w1 * 10000.0 - w2 * 100.0;
+            float b0 = (w1 + w2 + w3) / 200.0, b1 = b0 - w1 / 100.0, b2 = b1 - w2 / 100.0, b3 = b2 - w3 / 100.0;
+            block = s >= b0 ? 0.0 : s >= b1 ? 1.0 : s >= b2 ? 2.0 : (blocks > 4.5 && s >= b3) ? 3.0 : blocks - 1.0;
+        }
         vec2 uv = vStq.xy / vStq.z;
         float h = 0.5 / float(textureSize(tex, 0).y);
         float v = p.orig.y > 0.5 ? clamp(uv.y, 0.0, 1.0) : fract(uv.y);
