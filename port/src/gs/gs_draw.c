@@ -274,7 +274,22 @@ static int menu_piece_moving(const Vtx *v, const Vtx *last, float x0, float x1, 
 
 static void menu_hd_trim(uint64_t incoming);
 static void texture_cache_trim(void);
+/* (Rev19) what making textures cost in the last frame: all of it, the anime colours from the files, those made for the
+   textures without one, and how many; a frame over 100 ms is written to the log (a model opening slowly in the museum) */
+static uint64_t sCostTexNs, sCostAnimeNs, sCostDeriveNs, sCostT0;
+static unsigned sCostNew, sCostAnime;
 void GsGpu_ListStart(void) {
+    {
+        uint64_t now = SDL_GetTicksNS();
+        if (sCostT0 != 0 && sCostTexNs > 100000000ull) {
+            fprintf(stderr, "carga: imagen %u tardo %.0f ms; texturas nuevas %u en %.0f ms (colores anime %u en %.0f ms, sin archivo %.0f ms); cache %d texturas\n",
+                    gGsFrame, (double)(now - sCostT0) / 1e6, sCostNew, (double)sCostTexNs / 1e6, sCostAnime,
+                    (double)sCostAnimeNs / 1e6, (double)sCostDeriveNs / 1e6, gsTexCount);
+        }
+        sCostT0 = now;
+        sCostTexNs = sCostAnimeNs = sCostDeriveNs = 0;
+        sCostNew = sCostAnime = 0;
+    }
     texture_cache_trim();
     menu_hd_trim(0);
     sMenuFree = 0;
@@ -328,7 +343,10 @@ typedef struct Tex {
                                 side is past the edge, -1 if before it; 0 = not one */
     int toonWhy;             /* (BT3_ANIME_LOG) asked for as a ramp: 1 redrawn; not: 2 shading off, 3 a pack's, 4 taken as
                                 text, 5 no pixels; 0 = not asked for as one */
+    int dead;                /* (Rev19) made for a model no longer in its row (anime_tex_current): never found again, let go
+                                by texture_cache_trim once no picture still draws with it */
 } Tex;
+static unsigned sTexDead; /* how many entries are dead */
 static Tex sTex[MAX_TEX];
 /* For each uniform of the frame: 1 + the uniform of the layer it is a copy of (the anime pass, the rim light: the same
    triangles again over a fighter's layer), 0 = its own. The in-between pictures give such a copy exactly what they
@@ -759,6 +777,25 @@ static void texture_cache_trim(void) {
     unsigned i,n=0,retired=0;
     const char *setting=getenv("BT3_TEXTURE_CACHE_MB");
     if(setting) {int mb=atoi(setting);if(mb>=32&&mb<=2048)budget=(uint64_t)mb<<20;}
+    if(sTexDead) {
+        /* (Rev19) the dead entries (anime_tex_current) no picture of the last four frames drew with */
+        unsigned left=0;
+        for(i=0,n=0;i<(unsigned)gsTexCount;++i) {
+            Tex *t=&sTex[i];
+            if(t->dead && gGsFrame-t->last>4) {
+                int f;
+                sBackend->texDestroy(t->tex);++retired;
+                for(f=0;f<t->animeCount;f++) if(t->anime[f]!=0) sBackend->texDestroy(t->anime[f]);
+            } else {
+                left+=t->dead!=0;
+                sTex[n++]=*t;
+            }
+        }
+        sTexDead=left;
+        if(retired) {gsTexCount=n;texture_cache_reindex();}
+        if(retired && getenv("BT3_ANIME_LOG"))fprintf(stderr,"anime: %u texturas de un modelo anterior soltadas (quedan %d)\n",retired,gsTexCount);
+        retired=0;n=0;
+    }
     if(sTextureBytes<=budget)return;
     target=budget-budget/8;
     for(i=0;i<(unsigned)gsTexCount;++i) {
@@ -1374,6 +1411,12 @@ static int anime_tex_current(Tex *c) {
         return 1;
     }
     c->gen ^= 0xA5A5A5A5u;
+    /* (Rev19) and let go soon: each fighter opened in the museum takes row 0 again, and every texture of the one before
+       stayed in the cache with all its anime colours until it was full: each model opened slower than the last) */
+    if (!c->dead) {
+        c->dead = 1;
+        sTexDead++;
+    }
     return 0;
 }
 /* the row of a fighter's texture: the alpha of its first texel of one of the first 16 palette entries (slot + row * 15,
@@ -1450,7 +1493,7 @@ static int anime_alpha_same(int folder, const uint32_t *px, uint32_t count) {
     }
     return 1;
 }
-static struct { uint64_t tex; uint32_t w, h; uint8_t *orig, *anime; int entry; } sDerived[48];
+static struct { uint64_t tex; uint32_t w, h; uint8_t *orig, *anime; int entry, model; } sDerived[48]; /* (model: of the row it was made for, Rev19) */
 static unsigned sDerivedNext;
 
 static int anime_derive_try(uint64_t texHash, const uint32_t *px, uint32_t w, uint32_t h, uint8_t **out, int *entry);
@@ -1523,7 +1566,9 @@ static int anime_derive_try(uint64_t texHash, const uint32_t *px, uint32_t w, ui
     }
     for (s = 0; s < 48; s++) { /* the same face seen before: lit otherwise now, the same colours */
         double mean[3];
-        if (sDerived[s].anime != NULL && sDerived[s].tex == texHash && sDerived[s].w == w && sDerived[s].h == h) {
+        if (sDerived[s].anime != NULL && sDerived[s].tex == texHash && sDerived[s].w == w && sDerived[s].h == h &&
+            sDerived[s].model == anime_row_model(sDeriveRow)) { /* (Rev19: only for the same model: one form's colours made
+            for a texture it shares with another form were reused for that other form, Goku SSJ's on SSJ2) */
             if (anime_fit(sDerived[s].orig, now, w * h, mean) > 12.0) {
                 return 0;
             }
@@ -1726,6 +1771,7 @@ static int anime_derive_try(uint64_t texHash, const uint32_t *px, uint32_t w, ui
                 sDerived[slot].anime = malloc((size_t)w * h * 8);
                 memcpy(sDerived[slot].anime, a, (size_t)w * h * 8);
                 sDerived[slot].entry = bestId;
+                sDerived[slot].model = anime_row_model(sDeriveRow);
             }
             if (getenv("BT3_ANIME_LOG") != NULL) {
                 fprintf(stderr, "anime: made for %016llx %ux%u from the nearest file, %s (%.1f steps off)\n",
@@ -1829,6 +1875,7 @@ static int anime_derive_try(uint64_t texHash, const uint32_t *px, uint32_t w, ui
             sDerived[slot].anime = malloc((size_t)w * h * 8);
             memcpy(sDerived[slot].anime, a, (size_t)w * h * 8);
             sDerived[slot].entry = sAnimeTable[t].entry;
+            sDerived[slot].model = anime_row_model(sDeriveRow);
             if (getenv("BT3_ANIME_LOG") != NULL) {
                 fprintf(stderr, "anime: made for %016llx %ux%u from the colours of %s (exact %u, near %u of %u)\n",
                         (unsigned long long)texHash, w, h, TexPack_Path(sAnimeTable[t].entry), exact, near, w * h);
@@ -2242,11 +2289,30 @@ static GsTex texture_get(int ctx, int menuHd) {
             }
         }
         animeFound = k;
+        if (animeFound > 1 && anime_row_model(row) < 0) {
+            /* (Rev19) the model not known: every folder with the texture would do, and the first one's colours go on
+               (a form's folder on another form that shares the texture). Written to the log, to know when it happens. */
+            if (getenv("BT3_ANIME_LOG") != NULL) {
+                static uint64_t said[256];
+                static unsigned saidN;
+                unsigned q;
+                uint64_t key = TexPack_LastTex() ^ (uint64_t)(row + 2) << 56;
+                for (q = 0; q < 256 && said[q] != key; q++) {}
+                if (q == 256) {
+                    said[saidN++ & 255] = key;
+                    fprintf(stderr, "anime: modelo desconocido (fila %d) para %s: %d carpetas posibles\n", row,
+                            TexPack_Path(animeIds[0]), animeFound);
+                }
+            }
+        }
     }
     for (f = 0; f < animeFound && !replaced && !menuText && px != NULL && rw == tw && rh == th; f++) {
         if (sBackend->texSlotsLeft() > 1) {
+            uint64_t c0 = gpu_now();
             animeTex[animeCount] = anime_texture(animeIds[f], animeOther, px, tw, th, &animeCut[animeCount],
                                                  &animeTones[animeCount]);
+            sCostAnimeNs += gpu_now() - c0;
+            sCostAnime++;
             animeEntry[animeCount] = animeIds[f];
             animeCount += animeTex[animeCount] != 0;
         }
@@ -2259,8 +2325,12 @@ static GsTex texture_get(int ctx, int menuHd) {
         /* no file for it: a face of a fighter on the screen seen only in close-ups gets that fighter's colours (anime_derive) */
         uint8_t *made;
         int entry;
+        uint64_t c0 = gpu_now();
+        int got;
         sDeriveRow = anime_px_row(px, tw * th);
-        if (anime_derive(TexPack_LastTex(), px, tw, th, &made, &entry)) {
+        got = anime_derive(TexPack_LastTex(), px, tw, th, &made, &entry);
+        sCostDeriveNs += gpu_now() - c0;
+        if (got) {
             TexPackImage img, held;
             int c = 0;
             memset(&img, 0, sizeof(img));
@@ -2301,8 +2371,11 @@ static GsTex texture_get(int ctx, int menuHd) {
                (int)((px[0] >> 24) / 15) : -1;
     gGpuTexNs += gpu_now() - tex_t0;
     gDrawTexNs += gpu_now() - tex_t0;
+    sCostTexNs += gpu_now() - tex_t0;
+    sCostNew++;
     gDrawNewTex++;
     t = &sTex[gsTexCount];
+    t->dead = 0;
     t->tex = replaced ? pack_texture(&pack) : sBackend->texCreate(rw, rh, GS_TEXFMT_RGBA8, 1);
     if (t->tex == 0) {
         free(px);

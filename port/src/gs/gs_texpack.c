@@ -581,7 +581,7 @@ void TexPack_Init(void) {
         sBucket[h] = i + 1;
     }
     fprintf(stderr, "bt3: texture pack: %u replacement textures in %s (%u more with a name already seen)\n", sCount - dup, root, dup);
-    fprintf(stderr, "bt4 anime: build Rev18 (anime_reparto.txt: cortes fijos por pieza; registro area por superficie vista; museo circulo rota / cuadrado destruida; 4 y 5 capas; efecto esfera)\n");
+    fprintf(stderr, "bt4 anime: build Rev19 (texturas de modelos anteriores soltadas; colores sin archivo solo del mismo modelo; registro carga lenta; museo circulo/cuadrado)\n");
 }
 
 int TexPack_Count(void) {
