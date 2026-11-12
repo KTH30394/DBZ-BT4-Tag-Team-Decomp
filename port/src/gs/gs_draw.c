@@ -311,6 +311,7 @@ typedef struct Tex {
     GsTex anime[ANIME_FORMS];   /* its anime colours from the texture pack (TexPack_LoadAnime), one a form of the fighter */
     float animeCut[ANIME_FORMS]; /* and how far each one's edge moves towards the shadow side (anime_cut.txt) */
     int animeTones[ANIME_FORMS]; /* and 2, or 3 with a middle tone (TexPack_AnimeMid) */
+    int animeLines[ANIME_FORMS]; /* (Rev22) 1: its lines drawn clean (one more block, anime_lines_make) */
     int animeEntry[ANIME_FORMS]; /* (the pack's entries: TexPack_AnimeRamps) */
     int animeCount;
     int arow;                /* a fighter's texture: the row of the alpha table its palette has (BtlObjMdl_InitAlphaSlots
@@ -1033,7 +1034,127 @@ static double anime_fit(const uint8_t *o, const uint8_t *n, uint32_t count, doub
     return worst;
 }
 
-static GsTex anime_texture(int id, int other, const uint32_t *px, uint32_t w, uint32_t h, float *cut, int *tones) {
+/* Rev22 (13-nov-2026): the lines inside a piece drawn clean (gs.frag mode 4, rect / extra.z). From an anime file's
+   original block (the texture as the game has it) and its lit block: the lines (dark strokes, up to 5 texels across,
+   longer than they are wide: not a pupil or a dark patch) are found; each point of a line gets the distance to the
+   line's middle (its skeleton) and the line's width there (the darkness it has across, so a line keeps its weight and
+   thins as it ends). The tone blocks get the colour round the line where the line was (so nothing of the old line,
+   blurred when the texture is stretched, is left), and one more block after them holds R = distance / 8 texels,
+   G = half the width / 8 texels. gs.frag draws the line black from that, as wide as it was but never wider than the
+   outline, sharp at any size. NULL: no lines (the file uploaded as before). (n + 1) blocks, freed by the caller. */
+static float lum_rgb(const uint8_t *q) { return 0.114f * q[0] + 0.587f * q[1] + 0.299f * q[2]; }
+static void anime_close(const float *Y, float *out, float *tmp, int w, int h, int r) {
+    int x, y, k;
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) { float m = -1.0f; for (k = -r; k <= r; k++) { int xx = x + k; if (xx >= 0 && xx < w && Y[y * w + xx] > m) m = Y[y * w + xx]; } tmp[y * w + x] = m; }
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) { float m = -1.0f; for (k = -r; k <= r; k++) { int yy = y + k; if (yy >= 0 && yy < h && tmp[yy * w + x] > m) m = tmp[yy * w + x]; } out[y * w + x] = m; }
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) { float m = 1e9f; for (k = -r; k <= r; k++) { int xx = x + k; if (xx >= 0 && xx < w && out[y * w + xx] < m) m = out[y * w + xx]; } tmp[y * w + x] = m; }
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) { float m = 1e9f; for (k = -r; k <= r; k++) { int yy = y + k; if (yy >= 0 && yy < h && tmp[yy * w + x] < m) m = tmp[yy * w + x]; } out[y * w + x] = m; }
+}
+static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint32_t w, uint32_t h, int n) {
+    int W = (int)w, H = (int)h, N = W * H, i, x, y, k, t, changed, any = 0;
+    float *Yo = malloc(sizeof(float) * N * 6), *Co = Yo + N, *Ya = Yo + 2 * N, *Ca = Yo + 3 * N, *tmp = Yo + 4 * N, *amt = Yo + 5 * N;
+    float *dt = malloc(sizeof(float) * N * 3), *dc = dt + N, *hw = dt + 2 * N;
+    int *lab = malloc(sizeof(int) * N * 3), *src = lab + N, *q = lab + 2 * N;
+    uint8_t *mask = calloc((size_t)N, 1), *out = NULL;
+    static const int DX[8] = {1, -1, 0, 0, 1, 1, -1, -1}, DY[8] = {0, 0, 1, -1, 1, -1, 1, -1};
+    if (Yo == NULL || dt == NULL || lab == NULL || mask == NULL) goto done;
+    for (i = 0; i < N; i++) { Yo[i] = lum_rgb(orig + i * 4); Ya[i] = lum_rgb(tones + i * 4); }
+    anime_close(Yo, Co, tmp, W, H, 3);
+    anime_close(Ya, Ca, tmp, W, H, 3);
+    for (i = 0; i < N; i++) {
+        int a0 = tones[i * 4 + 3] == 0;
+        if (Co[i] < 8.0f || Co[i] - Yo[i] < 20.0f || Yo[i] / Co[i] > 0.88f) continue;
+        if (!a0 && (Ca[i] < 8.0f || Ya[i] / Ca[i] > 0.94f)) continue; /* (a line the file took out, as a flat iris's ring) */
+        mask[i] = 1;
+    }
+    /* distance to the outside of the line (chamfer 1 / 1.414), both ways */
+    for (i = 0; i < N; i++) dt[i] = mask[i] ? 1e6f : 0.0f;
+    for (y = 0; y < H; y++) for (x = 0; x < W; x++) { i = y * W + x; if (!mask[i]) continue; { float m = dt[i];
+        if (x > 0) m = fminf(m, dt[i - 1] + 1.0f); else m = fminf(m, 1.0f);
+        if (y > 0) { m = fminf(m, dt[i - W] + 1.0f); if (x > 0) m = fminf(m, dt[i - W - 1] + 1.414f); if (x < W - 1) m = fminf(m, dt[i - W + 1] + 1.414f); } else m = fminf(m, 1.0f);
+        dt[i] = m; } }
+    for (y = H - 1; y >= 0; y--) for (x = W - 1; x >= 0; x--) { i = y * W + x; if (!mask[i]) continue; { float m = dt[i];
+        if (x < W - 1) m = fminf(m, dt[i + 1] + 1.0f); else m = fminf(m, 1.0f);
+        if (y < H - 1) { m = fminf(m, dt[i + W] + 1.0f); if (x < W - 1) m = fminf(m, dt[i + W + 1] + 1.414f); if (x > 0) m = fminf(m, dt[i + W - 1] + 1.414f); } else m = fminf(m, 1.0f);
+        dt[i] = m; } }
+    /* each line on its own: too wide (a patch) or not longer than wide (a pupil, a dot): left as it is */
+    for (i = 0; i < N; i++) lab[i] = -1;
+    for (i = 0; i < N; i++) {
+        int head = 0, tail = 0, cnt = 0, ridge = 0, j;
+        float mx = 0.0f;
+        if (!mask[i] || lab[i] >= 0) continue;
+        lab[i] = i; q[tail++] = i;
+        while (head < tail) { int c = q[head++], cx = c % W, cy = c / W; cnt++; mx = fmaxf(mx, dt[c]);
+            { int top = 1; for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k], jj; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; jj = yy * W + xx; if (mask[jj] && dt[jj] > dt[c] + 0.01f) top = 0; } ridge += top; }
+            for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k], jj; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; jj = yy * W + xx; if (mask[jj] && lab[jj] < 0) { lab[jj] = i; q[tail++] = jj; } } }
+        if (mx > 3.0f || (float)ridge < 2.5f * mx || cnt < 3) { for (j = 0; j < tail; j++) mask[q[j]] = 2; } /* (2: left alone) */
+    }
+    /* the line's darkness at each point, 0..1 (its middle 1): from the lit block where the file has it, else the original */
+    for (i = 0; i < N; i++) {
+        float d = 0.0f;
+        if (mask[i] != 1) { amt[i] = 0.0f; continue; }
+        if (tones[i * 4 + 3] != 0 && Ca[i] > 8.0f) d = 1.0f - Ya[i] / Ca[i];
+        else if (Co[i] > 8.0f) d = (1.0f - Yo[i] / Co[i]) / 0.5f;
+        amt[i] = d < 0.0f ? 0.0f : d > 1.0f ? 1.0f : d;
+    }
+    /* the skeleton (ridge of dt), then each point's nearest skeleton point and its distance to it */
+    for (i = 0; i < N; i++) { dc[i] = 1e6f; src[i] = -1; }
+    for (i = 0; i < N; i++) { int cx = i % W, cy = i / W, top = 1;
+        if (mask[i] != 1) continue;
+        for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k], jj; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; jj = yy * W + xx; if (mask[jj] == 1 && dt[jj] > dt[i] + 0.01f) top = 0; }
+        if (top) { dc[i] = 0.0f; src[i] = i; any = 1; } }
+    if (!any) goto done;
+    do { changed = 0;
+        for (i = 0; i < N; i++) { int cx = i % W, cy = i / W; if (mask[i] != 1) continue;
+            for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k], jj; float d; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; jj = yy * W + xx;
+                if (mask[jj] != 1 || src[jj] < 0) continue; d = dc[jj] + (k < 4 ? 1.0f : 1.414f); if (d < dc[i] - 0.001f) { dc[i] = d; src[i] = src[jj]; changed = 1; } } }
+    } while (changed);
+    /* the width at each skeleton point: the darkness of the points that are nearest to it (the line's weight), smoothed */
+    for (i = 0; i < N; i++) tmp[i] = 0.0f;
+    for (i = 0; i < N; i++) if (mask[i] == 1 && src[i] >= 0) tmp[src[i]] += amt[i];
+    for (i = 0; i < N; i++) { int cx = i % W, cy = i / W, cn = 1; float s;
+        hw[i] = 0.0f; if (mask[i] != 1 || src[i] != i) continue; s = tmp[i];
+        for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k], jj; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; jj = yy * W + xx; if (mask[jj] == 1 && src[jj] == jj) { s += tmp[jj]; cn++; } }
+        hw[i] = 0.5f * s / (float)cn; }
+    out = malloc((size_t)N * 4 * (n + 1));
+    if (out == NULL) goto done;
+    memcpy(out, tones, (size_t)N * 4 * n);
+    /* the tone blocks: where a line was, the colour round it (nearest point that is no line), opaque */
+    for (t = 0; t < n; t++) {
+        uint8_t *b = out + (size_t)t * N * 4;
+        int head = 0, tail = 0;
+        for (i = 0; i < N; i++) { lab[i] = (mask[i] == 1) ? -1 : (b[i * 4 + 3] != 0 ? 1 : 0); if (lab[i] == 1) { int cx = i % W, cy = i / W, edge = 0;
+            for (k = 0; k < 4; k++) { int xx = cx + DX[k], yy = cy + DY[k]; if (xx >= 0 && yy >= 0 && xx < W && yy < H && mask[yy * W + xx] == 1) edge = 1; } if (edge) q[tail++] = i; } }
+        while (head < tail) { int c = q[head++], cx = c % W, cy = c / W;
+            for (k = 0; k < 4; k++) { int xx = cx + DX[k], yy = cy + DY[k], jj; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; jj = yy * W + xx;
+                if (lab[jj] == -1) { memcpy(b + jj * 4, b + c * 4, 3); b[jj * 4 + 3] = 255; lab[jj] = 1; q[tail++] = jj; } } }
+        for (i = 0; i < N; i++) if (lab[i] == -1) { b[i * 4] = b[i * 4 + 1] = b[i * 4 + 2] = 0; b[i * 4 + 3] = 255; } /* (nothing round it: black) */
+    }
+    { uint8_t *L = out + (size_t)n * N * 4;
+        for (i = 0; i < N; i++) {
+            float d = mask[i] == 1 ? dc[i] : 8.0f, r = (mask[i] == 1 && src[i] >= 0) ? hw[src[i]] : 0.0f;
+            L[i * 4] = (uint8_t)(fminf(d, 8.0f) / 8.0f * 255.0f + 0.5f);
+            L[i * 4 + 1] = (uint8_t)(fminf(r, 8.0f) / 8.0f * 255.0f + 0.5f);
+            L[i * 4 + 2] = 0; L[i * 4 + 3] = 255; } }
+done:
+    free(Yo); free(dt); free(lab); free(mask);
+    return out;
+}
+/* (made once a file: the same file comes again with every palette, every flash) */
+static const uint8_t *anime_lines_get(int id, const uint8_t *tones, const uint8_t *orig, uint32_t w, uint32_t h, int n) {
+    static struct { int id, n; uint32_t w, h; uint8_t *data; int none; } c[128];
+    static unsigned next;
+    int k;
+    for (k = 0; k < 128; k++) if ((c[k].data != NULL || c[k].none) && c[k].id == id && c[k].w == w && c[k].h == h && c[k].n == n) return c[k].data;
+    k = (int)(next++ & 127);
+    free(c[k].data);
+    c[k].id = id; c[k].w = w; c[k].h = h; c[k].n = n;
+    c[k].data = getenv("BT3_NO_LINES") != NULL ? NULL : anime_lines_make(tones, orig, w, h, n);
+    c[k].none = c[k].data == NULL;
+    return c[k].data;
+}
+
+static GsTex anime_texture(int id, int other, const uint32_t *px, uint32_t w, uint32_t h, float *cut, int *tones, int *lines) {
     TexPackImage img;
     int c = 0, k, slot = -1, n = 2;
     uint32_t i, x, y;
@@ -1042,6 +1163,7 @@ static GsTex anime_texture(int id, int other, const uint32_t *px, uint32_t w, ui
 
     *cut = 0.0f;
     *tones = 2;
+    *lines = 0;
     if (other) {
         /* The same texture under a palette with no file of its own (a fight's, a flash's): of the folder's files for
            it under each palette (the expressions of a pair of eyes, the faces of two costumes), the one whose original
@@ -1115,6 +1237,15 @@ static GsTex anime_texture(int id, int other, const uint32_t *px, uint32_t w, ui
         img.h = n * h;
         img.bytes[0] = w * h * n * 4;
         img.levels = 1;
+        { /* (Rev22) the lines drawn clean: one more block after the tones (anime_lines_make) */
+            const uint8_t *aug = anime_lines_get(id, img.data[0], fileOriginal, w, h, n);
+            if (aug != NULL) {
+                img.data[0] = aug;
+                img.h = (uint32_t)(n + 1) * h;
+                img.bytes[0] = w * h * (n + 1) * 4;
+                *lines = 1;
+            }
+        }
     }
     if (other) {
         /* Another palette than the one the colours were made for: the same picture in a fight (each fighter's
@@ -1171,13 +1302,13 @@ static GsTex anime_texture(int id, int other, const uint32_t *px, uint32_t w, ui
             return tex;
         }
         /* (a copy: the one held stays the original's) */
-        a = (uint8_t *)malloc((size_t)w * h * n * 4);
+        a = (uint8_t *)malloc((size_t)w * h * (n + *lines) * 4);
         if (a == NULL) {
             return 0;
         }
-        memcpy(a, img.data[0], (size_t)w * h * n * 4);
+        memcpy(a, img.data[0], (size_t)w * h * (n + *lines) * 4);
         img.data[0] = a;
-        img.bytes[0] = w * h * n * 4;
+        img.bytes[0] = w * h * (n + *lines) * 4;
         for (y = 0; y < h; y++) {
             for (x = 0; x < w; x++) {
                 for (k = 0; k < 3; k++) {
@@ -1982,7 +2113,7 @@ static GsTex texture_get(int ctx, int menuHd) {
     int animeIds[ANIME_FORMS], animeFound = 0, animeOther = 0, animeCount = 0, f;
     GsTex animeTex[ANIME_FORMS];
     float animeCut[ANIME_FORMS];
-    int animeEntry[ANIME_FORMS], animeTones[ANIME_FORMS], animeRow = -1;
+    int animeEntry[ANIME_FORMS], animeTones[ANIME_FORMS], animeLines[ANIME_FORMS] = {0}, animeRow = -1;
     uint64_t markForms = 0;
     uint32_t rampHash = 0, packName = 0;
     uint64_t texName = 0;
@@ -2246,7 +2377,7 @@ static GsTex texture_get(int ctx, int menuHd) {
     for (f = 0; f < animeFound && !replaced && !menuText && px != NULL && rw == tw && rh == th; f++) {
         if (sBackend->texSlotsLeft() > 1) {
             animeTex[animeCount] = anime_texture(animeIds[f], animeOther, px, tw, th, &animeCut[animeCount],
-                                                 &animeTones[animeCount]);
+                                                 &animeTones[animeCount], &animeLines[animeCount]);
             animeEntry[animeCount] = animeIds[f];
             animeCount += animeTex[animeCount] != 0;
         }
@@ -2275,6 +2406,7 @@ static GsTex texture_get(int ctx, int menuHd) {
             animeCut[0] = anime_held(entry, &held, &c) ? (float)c / 300.0f : 0.0f;
             animeEntry[0] = entry;
             animeTones[0] = 2;
+            animeLines[0] = 0;
             animeCount = animeTex[0] != 0;
         }
     }
@@ -2369,6 +2501,7 @@ static GsTex texture_get(int ctx, int menuHd) {
         t->animeCut[f] = animeCut[f];
         t->animeEntry[f] = animeEntry[f];
         t->animeTones[f] = animeTones[f];
+        t->animeLines[f] = animeLines[f];
     }
     t->rampHash = rampHash;
     t->rampFlat = rampFlat;
@@ -3608,6 +3741,7 @@ static struct {
     float cut[ANIME_FORMS];
     int entry[ANIME_FORMS];
     int tones[ANIME_FORMS];
+    int lines[ANIME_FORMS]; /* (Rev22) 1: one more block, the lines (anime_lines_make) */
     int forms;
     int row; /* the fighter's row of the alpha table (Tex.arow) */
     int sampler;
@@ -3883,6 +4017,7 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
             sAnimeStrip.cut[f] = sLast->animeCut[f];
             sAnimeStrip.entry[f] = sLast->animeEntry[f];
             sAnimeStrip.tones[f] = sLast->animeTones[f];
+            sAnimeStrip.lines[f] = sLast->animeLines[f];
         }
         sAnimeStrip.sampler = d.sampler;
     }
@@ -4276,6 +4411,14 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
             a.rect[0] = 1000000.0f + (float)(cw[0] * 10000 + cw[1] * 100 + cw[2]);
         }
         a.rect[2] = a.rect[3] = 0.0f;
+        /* (Rev22) the lines drawn clean (gs.frag extra.z, the portrait fade's field: not used by these draws): the
+           outline's width in pixels of the picture as their widest, 0 = the texture has no line block */
+        {
+            float od, ow;
+            GsDraw_OutlineLook(&od, &ow);
+            a.portrait[0] = sAnimeStrip.lines[form] ? ow * (float)SCALE : 0.0f;
+            a.portrait[1] = 0.0f;
+        }
         if (a.orig[2] != 0.0f && gsVuIdxCount + (count - 2) * 3 <= MAX_VU_IDX) {
             /* A strip's triangles turn the other way every second one; listed as they come (layer 1's list), half of
                them would face the other way on the screen. Here every second one is listed the other way round, so

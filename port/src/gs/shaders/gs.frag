@@ -107,8 +107,24 @@ void main() {
         vec2 uv = vStq.xy / vStq.z;
         float h = 0.5 / float(textureSize(tex, 0).y);
         float v = p.orig.y > 0.5 ? clamp(uv.y, 0.0, 1.0) : fract(uv.y);
-        vec4 t = texture(tex, vec2(uv.x, clamp(v / blocks, h, 1.0 / blocks - h) + block / blocks));
+        // (Rev22, 13-nov-2026) extra.z > 0: one more block after the tones holds the lines inside the piece (gs_draw.c
+        // anime_lines_make: R = distance to the line's middle / 8 texels, G = half its width / 8 texels), and the tone
+        // blocks have the colour round each line where it was. The line is drawn here black, as wide as it was but never
+        // wider than the outline (extra.z: its width in pixels of the picture), sharp however much the texture is
+        // stretched (the edge one pixel soft, from how many texels a pixel covers).
+        float lineBlk = p.extra.z > 0.0 ? 1.0 : 0.0, tot = blocks + lineBlk;
+        vec2 tcl = uv * vec2(textureSize(tex, 0)) * vec2(1.0, 1.0 / tot);
+        float tpx = max(length(dFdx(tcl)), length(dFdy(tcl))); // texels of the piece per pixel of the picture
+        float vb = clamp(v / tot, h, 1.0 / tot - h);
+        vec4 t = texture(tex, vec2(uv.x, vb + block / tot));
+        vec4 lineT = lineBlk > 0.5 ? texture(tex, vec2(uv.x, vb + blocks / tot)) : vec4(1.0, 0.0, 0.0, 1.0);
         if (t.a < 0.5) discard; // (the game's own shading kept there)
+        if (lineBlk > 0.5) {
+            float dl = lineT.r * 8.0, hwl = lineT.g * 8.0;
+            float halfw = min(hwl, 0.5 * p.extra.z * tpx), aal = 0.5 * tpx;
+            float ink = hwl > 0.02 ? 1.0 - smoothstep(halfw - aal, halfw + aal, dl) : 0.0;
+            t.rgb = mix(t.rgb, vec3(0.0), ink);
+        }
         // The game outlines a model by drawing it a second time inside out, behind it: those triangles face the other
         // way on the screen, and they are the line round every lock of hair (the outline pass only draws lines between
         // parts, and a head of hair is one part). Left as the game drew them, on every model (orig.z: 1 = the shell is
