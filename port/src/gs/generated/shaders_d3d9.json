@@ -5,7 +5,7 @@
     "dclut.frag": "1d28c6df9af61c003fd293d26aeedbc775a0cecaf8e53f12a37956d748e7d2df",
     "fx.vert": "793c060e4086765c9a98de91eb3647113f896153d34fb952190ce846dc7c8b1b",
     "grade.frag": "11e7b5a45b3018020bdfde9f1f0dc45aee2cee9f2344fc8bcf6ae8d851f4f43b",
-    "gs.frag": "5d8c1d9213a7ee7a35258be0f41146bde6a5cb0e8c2ac1e8c7ea2cec0f3395a4",
+    "gs.frag": "74182c0bbafd0c0743e1ecca07abbb40e564fc1fcf6bcc5d80bcafce7415ee08",
     "gs.vert": "2823d430a36db73f5aa4dd6b6bbc34eb3ccf5438937820573a0eabc27dd72f2a",
     "outline.frag": "7cc526bb6f2689e5e5f070d20b0e75cddc3148a6d87941707ec06879771d756d",
     "vu0.vert": "a740be020bcbb80b851e60316d666f63d31b87c5afc3b7ccf725f692d13a6709",
@@ -13,12 +13,12 @@
     "vu6.vert": "ede902d15fedbaf21f0b5804481ecbe87262172ac7629198e94967a00c9f7058"
   },
   "generator_sha256": "48ac34cbdf6d4bb1eb2c6e5f501805180d9932462bf8859c7e0209b8418b7b5e",
-  "header_sha256": "5fedcd558a7235951b12bc798183664523ac37ec01c617987b76c9ef3b809410",
+  "header_sha256": "2d00772feafb88c86cc895bd916877380e06fa90fc5c9288dbe61d3fb00be781",
   "spv_sha256": {
     "gs.vert": "90128f47106627bfb227b81a481179f2745f59d34b1027000bf1e182f76e95fb",
-    "gs.frag": "1ca79f5d4eda1bb0a49593d9506028427d2fd2a8d42a9110ea91e373a5d00706",
-    "gsnz.frag": "226bbce7f1a30fa9e66501357dbf4dfc1576ac3bc3726eef12d00404f84b3c95",
-    "gswb.frag": "273dabfc4dfc350f895f7bc9749ee88d5b4ebe3e3a61d549c1c5d85ecf450a73",
+    "gs.frag": "e2bc804126351c61226d028845fde0190b715aae8a3ab39d2f99d10daa9a73e4",
+    "gsnz.frag": "504f04b703eb293427a0068314ae9fef91f7ced8e0734c71e990c8739aa893f2",
+    "gswb.frag": "b2dd0a0a05bbabf5b1d2eb1a6d0049449b324f9edf2a2b6f2c0cc272864311fa",
     "vu0.vert": "ca23db9b6a39bc39eaada65383d7d52a1e1a02f9ed00bf1c3a10ce6f8a60baae",
     "vu4.vert": "ebfad4ef4e3ad7aaa02733ef88d4a2eb48f57d9f6775ce392f31ab95a14401ab",
     "vu6.vert": "b1ba44b470eec68d2359b230a58b0fa0d10b023c6b6cabdd177c124090fe3539",
@@ -49,9 +49,9 @@
     {
       "shader": "gs.frag",
       "compiled": true,
-      "diagnostics": "D:\\a\\DBZ-BT4-Tag-Team-Decomp\\DBZ-BT4-Tag-Team-Decomp\\gs.frag(281,49-82): warning X4121: gradient-based operations must be moved out of flow control to prevent divergence. Performance may improve by using a non-gradient operation\nD:\\a\\DBZ-BT4-Tag-Team-Decomp\\DBZ-BT4-Tag-Team-Decomp\\gs.frag(237,20-35): warning X4121: gradient-based operations must be moved out of flow control to prevent divergence. Performance may improve by using a non-gradient operation\n\u0000",
-      "bytes": 7672,
-      "sha256": "7bf8792f50bec821fe130643225c3d05a00fb10a338d461183555bf20ee26207"
+      "diagnostics": "D:\\a\\DBZ-BT4-Tag-Team-Decomp\\DBZ-BT4-Tag-Team-Decomp\\gs.frag(329,49-82): warning X4121: gradient-based operations must be moved out of flow control to prevent divergence. Performance may improve by using a non-gradient operation\nD:\\a\\DBZ-BT4-Tag-Team-Decomp\\DBZ-BT4-Tag-Team-Decomp\\gs.frag(285,20-35): warning X4121: gradient-based operations must be moved out of flow control to prevent divergence. Performance may improve by using a non-gradient operation\n\u0000",
+      "bytes": 8252,
+      "sha256": "a3227821a1c0a9a1c432129c50d800ea40895aaaaa68034c6d835b254a5aa2ff"
     },
     {
       "shader": "gs.vert",
@@ -62,16 +62,16 @@
     {
       "shader": "gsnz.frag",
       "compiled": true,
-      "diagnostics": "D:\\a\\DBZ-BT4-Tag-Team-Decomp\\DBZ-BT4-Tag-Team-Decomp\\gsnz.frag(279,49-82): warning X4121: gradient-based operations must be moved out of flow control to prevent divergence. Performance may improve by using a non-gradient operation\nD:\\a\\DBZ-BT4-Tag-Team-Decomp\\DBZ-BT4-Tag-Team-Decomp\\gsnz.frag(235,20-35): warning X4121: gradient-based operations must be moved out of flow control to prevent divergence. Performance may improve by using a non-gradient operation\n\u0000",
-      "bytes": 7376,
-      "sha256": "2d6f08209436e156ad80e4cc39d05df5c70b095d024b65110dc83fc455d29876"
+      "diagnostics": "D:\\a\\DBZ-BT4-Tag-Team-Decomp\\DBZ-BT4-Tag-Team-Decomp\\gsnz.frag(327,49-82): warning X4121: gradient-based operations must be moved out of flow control to prevent divergence. Performance may improve by using a non-gradient operation\nD:\\a\\DBZ-BT4-Tag-Team-Decomp\\DBZ-BT4-Tag-Team-Decomp\\gsnz.frag(283,20-35): warning X4121: gradient-based operations must be moved out of flow control to prevent divergence. Performance may improve by using a non-gradient operation\n\u0000",
+      "bytes": 7980,
+      "sha256": "18559173a01bec95e96b13e1208f901424ae91d54ce512ca507da9e6bd55a350"
     },
     {
       "shader": "gswb.frag",
       "compiled": true,
-      "diagnostics": "D:\\a\\DBZ-BT4-Tag-Team-Decomp\\DBZ-BT4-Tag-Team-Decomp\\gswb.frag(313,49-82): warning X4121: gradient-based operations must be moved out of flow control to prevent divergence. Performance may improve by using a non-gradient operation\nD:\\a\\DBZ-BT4-Tag-Team-Decomp\\DBZ-BT4-Tag-Team-Decomp\\gswb.frag(269,20-35): warning X4121: gradient-based operations must be moved out of flow control to prevent divergence. Performance may improve by using a non-gradient operation\n\u0000",
-      "bytes": 8796,
-      "sha256": "39bb742e03b8d498e15c931941456f6ab2477f5033525bb87bdafb50433a79f8"
+      "diagnostics": "D:\\a\\DBZ-BT4-Tag-Team-Decomp\\DBZ-BT4-Tag-Team-Decomp\\gswb.frag(361,49-82): warning X4121: gradient-based operations must be moved out of flow control to prevent divergence. Performance may improve by using a non-gradient operation\nD:\\a\\DBZ-BT4-Tag-Team-Decomp\\DBZ-BT4-Tag-Team-Decomp\\gswb.frag(317,20-35): warning X4121: gradient-based operations must be moved out of flow control to prevent divergence. Performance may improve by using a non-gradient operation\n\u0000",
+      "bytes": 9400,
+      "sha256": "6c354617e7f3784bb9506b1adaa6843e4c659e1bbccbf07c1714cff58d17ab64"
     },
     {
       "shader": "outline.frag",
