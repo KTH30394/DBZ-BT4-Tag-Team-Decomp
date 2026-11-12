@@ -111,6 +111,9 @@ typedef struct AnimeFolder {
     uint64_t *exaTex;  /* and by texture */
     float (*exaP)[5];
     int *exaPN, exaCount;
+    uint64_t *repTex;  /* anime_reparto.txt (Rev18): fixed cuts by texture */
+    float (*repC)[4];
+    int *repN, repCount;
 } AnimeFolder;
 
 /* A file of texture hashes, one a line (hexadecimal; anything after it ignored). 1 = it is there. */
@@ -275,6 +278,49 @@ static int folder_of(const char *dir) {
                 memcpy(a->exa, q, sizeof(q));
                 a->exaN = k;
             }
+        }
+        fclose(f);
+    }
+    snprintf(path, sizeof(path), "%sanime_reparto.txt", dir);
+    f = fopen(path, "r");
+    if (f != NULL) {
+        /* (Rev18, 12-nov-2026) "<texture hash> <cut> <cut> ..." a line: that texture's FIXED cuts between its tones, on
+           the ramp r (0..1, the left of the picture first), as many as its tones less one; worked out from the area each
+           point covers on the screen over many pictures (BT3_ANIME_LOG "anime: area"), so that on average each tone
+           takes the share asked. They replace anime_cut / anime_mid / anime_capas for that texture; they never move. */
+        char line[256];
+        while (fgets(line, sizeof(line), f) != NULL) {
+            char *p = line, *e2;
+            float q[4];
+            int k = 0, t;
+            unsigned long long v;
+            while (*p == ' ' || *p == '\t') {
+                p++;
+            }
+            for (t = 0; t < 16 && isxdigit((unsigned char)p[t]); t++) {
+            }
+            if (t != 16 || (p[16] != ' ' && p[16] != '\t')) {
+                continue;
+            }
+            v = strtoull(p, &e2, 16);
+            p = e2;
+            while (k < 4) {
+                double x = strtod(p, &e2);
+                if (e2 == p) {
+                    break;
+                }
+                q[k++] = (float)x;
+                p = e2;
+            }
+            if (k < 1) {
+                continue;
+            }
+            a->repTex = realloc(a->repTex, (size_t)(a->repCount + 1) * sizeof(uint64_t));
+            a->repC = realloc(a->repC, (size_t)(a->repCount + 1) * sizeof(*a->repC));
+            a->repN = realloc(a->repN, (size_t)(a->repCount + 1) * sizeof(int));
+            a->repTex[a->repCount] = (uint64_t)v;
+            memcpy(a->repC[a->repCount], q, sizeof(q));
+            a->repN[a->repCount++] = k;
         }
         fclose(f);
     }
@@ -535,7 +581,7 @@ void TexPack_Init(void) {
         sBucket[h] = i + 1;
     }
     fprintf(stderr, "bt3: texture pack: %u replacement textures in %s (%u more with a name already seen)\n", sCount - dup, root, dup);
-    fprintf(stderr, "bt4 anime: build Rev17 (museo: circulo = ropa rota, cuadrado = ropa destruida; registro rtonos; 4 y 5 capas; efecto esfera)\n");
+    fprintf(stderr, "bt4 anime: build Rev18 (anime_reparto.txt: cortes fijos por pieza; registro area por superficie vista; museo circulo rota / cuadrado destruida; 4 y 5 capas; efecto esfera)\n");
 }
 
 int TexPack_Count(void) {
@@ -1014,6 +1060,20 @@ int TexPack_AnimeExacto(int id, float p[5]) {
         memcpy(p, sFolders[folder].exa, 5 * sizeof(float));
     }
     return sFolders[folder].exaN;
+}
+
+int TexPack_AnimeReparto(int id, float c[4]) {
+    int folder = TexPack_AnimeFolder(id), k;
+    if (folder < 0) {
+        return 0;
+    }
+    for (k = 0; k < sFolders[folder].repCount; k++) {
+        if (sFolders[folder].repTex[k] == sEntries[id].tex) {
+            memcpy(c, sFolders[folder].repC[k], 4 * sizeof(float));
+            return sFolders[folder].repN[k];
+        }
+    }
+    return 0;
 }
 
 int TexPack_AnimeEsfera(int id, uint32_t *osc, uint32_t *clr) {

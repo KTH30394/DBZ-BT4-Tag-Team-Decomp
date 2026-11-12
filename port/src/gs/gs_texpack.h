@@ -81,6 +81,9 @@ int TexPack_AnimeCapas(int id, int w[3]);
    a folder with anime_view.txt; gs_draw.c moves the cuts every picture so that each tone takes exactly that much of the
    piece as it is seen. Returns how many shares (0 = none: the cuts as anime_cut / anime_mid / anime_capas put them). */
 int TexPack_AnimeExacto(int id, float p[5]);
+/* anime_reparto.txt (Rev18, 12-nov-2026): "<hash> <cut> ..." a line, this texture's fixed cuts between its tones on the
+   ramp r (0..1, from the LEFT of the picture), worked out from many pictures. Returns how many (0 = not listed). */
+int TexPack_AnimeReparto(int id, float c[4]);
 /* A texture name (its first part, TexPack_LastTex) that some folder's anime_gloss.txt lists; and one that the folder
    of the fighter with file `model` lists (a folder with an anime_models.txt that has it): its program 1 strips are
    not drawn even without anime colours on them (gs_draw.c). */
