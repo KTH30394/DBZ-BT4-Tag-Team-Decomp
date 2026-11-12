@@ -221,7 +221,11 @@ s32 ChrView_StepLoad(ChrViewJob *job) {
         }
         /* fall through */
     case 1:
+#ifdef PORT
+        file = ChrView_GetModelFile(job->chara, job->costume, job->damaged & ~0x20); /* (0x20: torn textures, below) */
+#else
         file = ChrView_GetModelFile(job->chara, job->costume, job->damaged);
+#endif
         job->slot = ChrView_AllocSlot();
         if (job->slot == NULL) {
             return 1;
@@ -261,6 +265,15 @@ s32 ChrView_StepLoad(ChrViewJob *job) {
                 /* BT4's third Show argument includes visible costume parts. */
                 for (part = 4; part >= 1; --part) {
                     if ((job->damaged >> part) & 1) BtlObj_SetPartVisible(job->obj, part, 1);
+                }
+                /* PC build (museum circle / square, menu_h_b.c): 0x20 = the torn clothes, the swap the battle makes
+                   at low health (btl_char_coll_b.c Bt4_UpdateDamageTextures): the drawn body / eye tables (obj +0x48,
+                   +0x4C) take the model's entries 0x1A / 0x34 (+0x20, +0x24), if it has them. */
+                if ((job->damaged & 0x20) && *(void **)(job->obj + 0x20) != NULL) {
+                    *(void **)(job->obj + 0x48) = *(void **)(job->obj + 0x20);
+                    if (*(void **)(job->obj + 0x24) != NULL) {
+                        *(void **)(job->obj + 0x4C) = *(void **)(job->obj + 0x24);
+                    }
                 }
             }
 #endif

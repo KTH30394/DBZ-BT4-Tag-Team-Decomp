@@ -763,6 +763,18 @@ void CharRef_StateCostume(void) {
         gCharRef->state = CHARREF_ST_VIEW_WAIT;
         ChrView_Show(gCharRef->entry[gCharRef->cursor].chara, gCharRef->costume, 0);
         Snd_PlaySe(1, 1);
+#ifdef PORT
+    } else if (gPad[0].gamePressed & (PADG_CIRCLE | PADG_SQUARE)) {
+        /* PC build (12-nov-2026): circle shows the costume with its torn clothes (the texture set a fighter wears at
+           low health), square its destroyed clothes (the damaged model a finishing blow loads), as the BT3 disc's
+           square did. 0x20 = the torn textures (view_a_d.c ChrView_StepLoad): a real damaged model has none, so
+           square shows it as it is; one whose damaged model is only a copy of the normal one shows the torn clothes. */
+        CharRef_ClipGoto(0, 2, "fl_ok");
+        gCharRef->state = CHARREF_ST_VIEW_WAIT;
+        ChrView_Show(gCharRef->entry[gCharRef->cursor].chara, gCharRef->costume,
+                     (gPad[0].gamePressed & PADG_SQUARE) ? 0x21 : 0x20);
+        Snd_PlaySe(1, 1);
+#endif
     } else if (gPad[0].gamePressed & PADG_TRIANGLE) {
         CharRef_ClipGoto(0, 2, "fl_off_start");
         gCharRef->menuCursor = 3;
