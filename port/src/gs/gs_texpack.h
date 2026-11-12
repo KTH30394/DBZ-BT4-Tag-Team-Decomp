@@ -77,6 +77,10 @@ int TexPack_AnimeEsfera(int id, uint32_t *osc, uint32_t *clr);
    ramp, from the lit side, together centred on the edge. Returns how many middle tones (2 or 3), 0 = not listed (2 or 3
    tones as the file's height says, as before). */
 int TexPack_AnimeCapas(int id, int w[3]);
+/* anime_exacto.txt (Rev16, 12-nov-2026): the share of each tone in percent from the LEFT of the picture to the right, for
+   a folder with anime_view.txt; gs_draw.c moves the cuts every picture so that each tone takes exactly that much of the
+   piece as it is seen. Returns how many shares (0 = none: the cuts as anime_cut / anime_mid / anime_capas put them). */
+int TexPack_AnimeExacto(int id, float p[5]);
 /* A texture name (its first part, TexPack_LastTex) that some folder's anime_gloss.txt lists; and one that the folder
    of the fighter with file `model` lists (a folder with an anime_models.txt that has it): its program 1 strips are
    not drawn even without anime colours on them (gs_draw.c). */

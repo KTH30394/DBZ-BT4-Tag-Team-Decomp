@@ -3752,6 +3752,225 @@ static int anime_form(void) {
 
 /* Vertex program 0 as a shader: one strip of the fighters' models (see shaders/vu0.vert and gs_vu1.c). The strip
    becomes a triangle list of the program's own 48-byte vertices; the constants go into a uniform block. */
+/* anime_exacto.txt (Rev16, 12-nov-2026): for a folder with anime_view.txt, the cuts between the tones put where each
+   tone takes the share asked of the piece AS IT IS SEEN. Every strip of the piece adds, to where on the ramp (r, as
+   vu0.vert layer 10 has it) its points are, how much of the picture they cover (a third of each triangle's area on the
+   screen, if the point faces the camera); at the piece's first strip of the next picture that is summed up into the
+   cuts, which all its strips of that picture use. r low = the LEFT of the picture (the shares are given left to right);
+   the file's block 0 is the right. Out: the edge (misc.x) and rect.x as gs.frag mode 4 reads them. 0 = nothing yet. */
+#define EXA_BINS 256
+static int anime_exacto(int id, int tones, const float *vertices, uint32_t count, const float *consts, float viewSide,
+                        float *edge, float *rect0) {
+    static struct { int id; uint32_t frame; float acc[EXA_BINS], sum; float cut[4]; int have, n; float p[5];
+                    float seen[5]; uint32_t logF; } ex[64];
+    static unsigned exCount;
+    float p[5] = {0, 0, 0, 0, 0}, fx, fy, fz, fl, ax, ay, az, d, rl, total = 0.0f;
+    int n = TexPack_AnimeExacto(id, p), k, i;
+    unsigned q;
+    if (n < 2 || n != tones || count < 3) {
+        return 0;
+    }
+    for (k = 0; k < n; k++) {
+        total += p[k];
+    }
+    if (total <= 0.0f) {
+        return 0;
+    }
+    for (q = 0; q < exCount && ex[q].id != id; q++) {}
+    if (q == exCount) {
+        if (exCount == 64) {
+            for (q = 0; q < 64 && gGsFrame - ex[q].frame < 60; q++) {} /* (one not drawn for a second) */
+            if (q == 64) {
+                return 0;
+            }
+        } else {
+            exCount++;
+        }
+        memset(&ex[q], 0, sizeof(ex[q]));
+        ex[q].id = id;
+        ex[q].frame = gGsFrame;
+    }
+    if (ex[q].frame != gGsFrame) {
+        /* the last picture's piece summed up: the cuts at the shares asked, from the left */
+        if (ex[q].sum > 0.0f) {
+            float acc = 0.0f, want, cum = 0.0f;
+            int b = 0;
+            if (ex[q].have && ex[q].n == n) {
+                if (getenv("BT3_ANIME_LOG") != NULL) {
+                    /* (what each tone took of that picture with the cuts it was drawn with, left to right: it should be what was asked) */
+                    int t = 0;
+                    for (k = 0; k < 5; k++) {
+                        ex[q].seen[k] = 0.0f;
+                    }
+                    for (b = 0; b < EXA_BINS; b++) {
+                        float r = ((float)b + 0.5f) / (float)EXA_BINS;
+                        while (t < n - 1 && r > ex[q].cut[t]) {
+                            t++;
+                        }
+                        ex[q].seen[t] += ex[q].acc[b];
+                    }
+                }
+            }
+            b = 0;
+            for (k = 0; k < n - 1; k++) {
+                cum += p[k] / total;
+                want = cum * ex[q].sum;
+                while (b < EXA_BINS && acc + ex[q].acc[b] < want) {
+                    acc += ex[q].acc[b];
+                    b++;
+                }
+                ex[q].cut[k] = b >= EXA_BINS ? 1.0f :
+                               ((float)b + (ex[q].acc[b] > 0.0f ? (want - acc) / ex[q].acc[b] : 0.0f)) / (float)EXA_BINS;
+            }
+            for (k = 1; k < n - 1; k++) {
+                if (ex[q].cut[k] < ex[q].cut[k - 1]) {
+                    ex[q].cut[k] = ex[q].cut[k - 1];
+                }
+            }
+            ex[q].have = 1;
+            ex[q].n = n;
+            memcpy(ex[q].p, p, sizeof(p));
+        }
+        memset(ex[q].acc, 0, sizeof(ex[q].acc));
+        ex[q].sum = 0.0f;
+        ex[q].frame = gGsFrame;
+    }
+    /* this strip: r and the area on the screen of each point, as vu0.vert has them (bones blended by the weight) */
+    fx = consts[56 + 3]; fy = consts[56 + 7]; fz = consts[56 + 11];
+    fl = sqrtf(fx * fx + fy * fy + fz * fz);
+    if (fl <= 0.0f) {
+        return 0;
+    }
+    fx /= fl; fy /= fl; fz /= fl;
+    ax = fabsf(viewSide) > 1.5f ? consts[56 + 1] : consts[56 + 0];
+    ay = fabsf(viewSide) > 1.5f ? consts[56 + 5] : consts[56 + 4];
+    az = fabsf(viewSide) > 1.5f ? consts[56 + 9] : consts[56 + 8];
+    d = ax * fx + ay * fy + az * fz;
+    ax -= d * fx; ay -= d * fy; az -= d * fz;
+    rl = sqrtf(ax * ax + ay * ay + az * az);
+    if (rl <= 0.0f) {
+        return 0;
+    }
+    ax /= rl; ay /= rl; az /= rl;
+    {
+        float sx[3], sy[3], rr[3];
+        int face[3], ok[3];
+        for (i = 0; i < (int)count; i++) {
+            const float *v = &vertices[i * 12];
+            float w = v[3], m[3], pa[3], pb[3], P[3], na[3], nb[3], N[3], nl, s0, s1, s3;
+            int j, slot = i % 3;
+            for (j = 0; j < 3; j++) {
+                na[j] = consts[j] * v[4] + consts[4 + j] * v[5] + consts[8 + j] * v[6];
+                nb[j] = consts[16 + j] * v[4] + consts[20 + j] * v[5] + consts[24 + j] * v[6];
+                N[j] = nb[j] + (na[j] - nb[j]) * w;
+            }
+            for (j = 0; j < 3; j++) {
+                m[j] = v[j] - consts[32 + j];
+            }
+            for (j = 0; j < 3; j++) {
+                pa[j] = consts[j] * m[0] + consts[4 + j] * m[1] + consts[8 + j] * m[2] + consts[12 + j];
+            }
+            for (j = 0; j < 3; j++) {
+                m[j] = v[j] - consts[36 + j];
+            }
+            for (j = 0; j < 3; j++) {
+                pb[j] = consts[16 + j] * m[0] + consts[20 + j] * m[1] + consts[24 + j] * m[2] + consts[28 + j];
+                P[j] = pb[j] + ((consts[j] * (v[0] - consts[32]) + consts[4 + j] * (v[1] - consts[33]) +
+                                 consts[8 + j] * (v[2] - consts[34]) + consts[12 + j]) - pb[j]) * w;
+            }
+            (void)pa;
+            nl = sqrtf(N[0] * N[0] + N[1] * N[1] + N[2] * N[2]);
+            s0 = consts[56 + 0] * P[0] + consts[56 + 4] * P[1] + consts[56 + 8] * P[2] + consts[56 + 12];
+            s1 = consts[56 + 1] * P[0] + consts[56 + 5] * P[1] + consts[56 + 9] * P[2] + consts[56 + 13];
+            s3 = consts[56 + 3] * P[0] + consts[56 + 7] * P[1] + consts[56 + 11] * P[2] + consts[56 + 15];
+            ok[slot] = nl > 0.0f && s3 > 0.0f;
+            if (ok[slot]) {
+                float r = ((N[0] * ax + N[1] * ay + N[2] * az) / nl) * (viewSide > 0.0f ? 1.0f : -1.0f) * 0.5f + 0.5f;
+                rr[slot] = r < 0.0f ? 0.0f : r > 1.0f ? 1.0f : r;
+                face[slot] = (N[0] * fx + N[1] * fy + N[2] * fz) < 0.0f; /* (towards the camera: anime_edge < 0.5) */
+                sx[slot] = s0 / s3;
+                sy[slot] = s1 / s3;
+            }
+            if (i >= 2 && ok[0] && ok[1] && ok[2]) {
+                float area = 0.5f * fabsf((sx[1] - sx[0]) * (sy[2] - sy[0]) - (sx[2] - sx[0]) * (sy[1] - sy[0]));
+                if (area > 0.0f && area < 1.0e7f) {
+                    for (j = 0; j < 3; j++) {
+                        if (face[j]) {
+                            int b = (int)(rr[j] * (float)EXA_BINS);
+                            b = b < 0 ? 0 : b >= EXA_BINS ? EXA_BINS - 1 : b;
+                            ex[q].acc[b] += area / 3.0f;
+                            ex[q].sum += area / 3.0f;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (getenv("BT3_ANIME_LOG") != NULL && ex[q].have && gGsFrame >= ex[q].logF + 600) {
+        float s = 0.0f;
+        ex[q].logF = gGsFrame;
+        for (k = 0; k < ex[q].n; k++) {
+            s += ex[q].seen[k];
+        }
+        if (s > 0.0f) {
+            const char *path = TexPack_Path(id), *base = path, *c;
+            for (c = path; c != NULL && *c; c++) {
+                if (*c == '/' || *c == '\\') {
+                    base = c + 1;
+                }
+            }
+            fprintf(stderr, "anime: exacto %.8s pedido", base != NULL ? base : "?");
+            for (k = 0; k < ex[q].n; k++) {
+                fprintf(stderr, " %.1f", 100.0f * ex[q].p[k] / total);
+            }
+            fprintf(stderr, " visto izq-der");
+            for (k = 0; k < ex[q].n; k++) {
+                fprintf(stderr, " %.1f", 100.0f * ex[q].seen[k] / s);
+            }
+            fprintf(stderr, " cortes");
+            for (k = 0; k < ex[q].n - 1; k++) {
+                fprintf(stderr, " %.3f", ex[q].cut[k]);
+            }
+            fprintf(stderr, "\n");
+        }
+    }
+    if (!ex[q].have) {
+        return 0;
+    }
+    /* the cuts, from the left, as gs.frag mode 4 reads them: s = r - edge, block 0 (the right) s >= the last cut */
+    {
+        const float *c = ex[q].cut;
+        if (n == 2) {
+            *edge = c[0];
+            *rect0 = 0.0f;
+        } else if (n == 3) {
+            *edge = 0.5f * (c[0] + c[1]);
+            *rect0 = 0.5f * (c[1] - c[0]);
+        } else {
+            /* 4 or 5 tones: the middle tones' widths in whole percent of the ramp, from the right (block 1 first) */
+            int w1, w2, w3 = 0, W;
+            float lo = c[0], hi = c[n - 2], top;
+            /* (the total width whole too, and the inner cuts measured from the top that gs.frag gets from it) */
+            W = (int)floorf((hi - lo) * 100.0f + 0.5f);
+            top = 0.5f * (lo + hi) + (float)W / 200.0f;
+            if (n == 4) {
+                w1 = (int)floorf((top - c[1]) * 100.0f + 0.5f);
+                w2 = W - w1;
+            } else {
+                w1 = (int)floorf((top - c[2]) * 100.0f + 0.5f);
+                w2 = (int)floorf((top - c[1]) * 100.0f + 0.5f) - w1;
+                w3 = W - w1 - w2;
+            }
+            w1 = w1 < 0 ? 0 : w1 > 99 ? 99 : w1;
+            w2 = w2 < 0 ? 0 : w2 > 99 ? 99 : w2;
+            w3 = w3 < 0 ? 0 : w3 > 99 ? 99 : w3;
+            *edge = 0.5f * (lo + hi);
+            *rect0 = 1000000.0f + (float)(w1 * 10000 + w2 * 100 + w3);
+        }
+    }
+    return 1;
+}
+
 void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, const float *consts) {
     if (GS_NO_PICTURE) { /* a frame that is only being re-run, or one that is skipped: nothing is drawn */
         return;
@@ -4274,6 +4493,14 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
             int cw[3] = {0, 0, 0};
             TexPack_AnimeCapas(sAnimeStrip.entry[form], cw);
             a.rect[0] = 1000000.0f + (float)(cw[0] * 10000 + cw[1] * 100 + cw[2]);
+        }
+        if (layer == 1 && viewSide != 0.0f) {
+            /* anime_exacto.txt (Rev16): the cuts where each tone takes the share asked of the piece as it is seen */
+            float exEdge, exRect;
+            if (anime_exacto(sAnimeStrip.entry[form], sAnimeStrip.tones[form], vertices, count, consts, viewSide, &exEdge, &exRect)) {
+                a.misc[0] = exEdge;
+                a.rect[0] = exRect;
+            }
         }
         a.rect[2] = a.rect[3] = 0.0f;
         if (a.orig[2] != 0.0f && gsVuIdxCount + (count - 2) * 3 <= MAX_VU_IDX) {

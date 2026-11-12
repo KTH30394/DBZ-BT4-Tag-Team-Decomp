@@ -23,6 +23,7 @@
  * was read stays in memory (TEXPACK_BUDGET, the least recently used files go first). BT3_PACK_SYNC=1: each file is
  * read at once, inside the frame, as before (the same picture in every run: tests).
  */
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -105,6 +106,11 @@ typedef struct AnimeFolder {
     uint64_t *capTex;  /* anime_capas.txt: textures of 4 or 5 tones (TexPack_AnimeCapas) and the widths of their middle */
     int (*capW)[3];    /* tones, in percent of the ramp, from the lit side (2 for 4 tones, 3 for 5) */
     int *capN, capCount;
+    float exa[5];      /* anime_exacto.txt (Rev16): the share of each tone from the left of the picture, the whole folder */
+    int exaN;
+    uint64_t *exaTex;  /* and by texture */
+    float (*exaP)[5];
+    int *exaPN, exaCount;
 } AnimeFolder;
 
 /* A file of texture hashes, one a line (hexadecimal; anything after it ignored). 1 = it is there. */
@@ -221,6 +227,53 @@ static int folder_of(const char *dir) {
                 a->esfTex[a->esfCount] = (uint64_t)v;
                 a->esfOsc[a->esfCount] = (uint32_t)o;
                 a->esfClr[a->esfCount++] = (uint32_t)c;
+            }
+        }
+        fclose(f);
+    }
+    snprintf(path, sizeof(path), "%sanime_exacto.txt", dir);
+    f = fopen(path, "r");
+    if (f != NULL) {
+        /* (Rev16, 12-nov-2026) the share of each tone of the picture, in percent, from the LEFT of the picture to the
+           right: "22.5 55 22.5" (the whole folder) or "<texture hash> 25 10 10 30 25" (that texture); gs_draw.c puts
+           the cuts where each tone takes that much of the piece as it is seen, every picture (TexPack_AnimeExacto) */
+        char line[256];
+        while (fgets(line, sizeof(line), f) != NULL) {
+            char *p = line, *e2;
+            float q[5];
+            int k = 0, t, isTex = 0;
+            unsigned long long v = 0;
+            while (*p == ' ' || *p == '\t') {
+                p++;
+            }
+            for (t = 0; t < 16 && isxdigit((unsigned char)p[t]); t++) {
+            }
+            if (t == 16 && (p[16] == ' ' || p[16] == '\t')) {
+                v = strtoull(p, &e2, 16);
+                p = e2;
+                isTex = 1;
+            }
+            while (k < 5) {
+                double x = strtod(p, &e2);
+                if (e2 == p) {
+                    break;
+                }
+                q[k++] = (float)x;
+                p = e2;
+            }
+            if (k < 2) {
+                continue;
+            }
+            if (isTex) {
+                a->exaTex = realloc(a->exaTex, (size_t)(a->exaCount + 1) * sizeof(uint64_t));
+                a->exaP = realloc(a->exaP, (size_t)(a->exaCount + 1) * sizeof(*a->exaP));
+                a->exaPN = realloc(a->exaPN, (size_t)(a->exaCount + 1) * sizeof(int));
+                a->exaTex[a->exaCount] = (uint64_t)v;
+                memcpy(a->exaP[a->exaCount], q, sizeof(q));
+                a->exaPN[a->exaCount++] = k;
+            } else if (a->exaN == 0) {
+                memcpy(a->exa, q, sizeof(q));
+                a->exaN = k;
             }
         }
         fclose(f);
@@ -482,7 +535,7 @@ void TexPack_Init(void) {
         sBucket[h] = i + 1;
     }
     fprintf(stderr, "bt3: texture pack: %u replacement textures in %s (%u more with a name already seen)\n", sCount - dup, root, dup);
-    fprintf(stderr, "bt4 anime: build Rev15 (registro rtonos: reparto real de 4 y 5 tonos; 4 y 5 capas; efecto esfera)\n");
+    fprintf(stderr, "bt4 anime: build Rev16 (anime_exacto.txt: cortes exactos por pieza segun se ve; registro rtonos; 4 y 5 capas; efecto esfera)\n");
 }
 
 int TexPack_Count(void) {
@@ -944,6 +997,23 @@ int TexPack_AnimeCapas(int id, int w[3]) {
         }
     }
     return 0;
+}
+
+int TexPack_AnimeExacto(int id, float p[5]) {
+    int folder = TexPack_AnimeFolder(id), k;
+    if (folder < 0) {
+        return 0;
+    }
+    for (k = 0; k < sFolders[folder].exaCount; k++) {
+        if (sFolders[folder].exaTex[k] == sEntries[id].tex) {
+            memcpy(p, sFolders[folder].exaP[k], 5 * sizeof(float));
+            return sFolders[folder].exaPN[k];
+        }
+    }
+    if (sFolders[folder].exaN > 0) {
+        memcpy(p, sFolders[folder].exa, 5 * sizeof(float));
+    }
+    return sFolders[folder].exaN;
 }
 
 int TexPack_AnimeEsfera(int id, uint32_t *osc, uint32_t *clr) {
