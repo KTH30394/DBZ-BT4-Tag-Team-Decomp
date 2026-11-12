@@ -4108,7 +4108,7 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
         getenv("BT3_ANIME_LOG") != NULL) {
         /* (where on the ramp this strip's points are, by texture, every 600 frames: compare light and shadow between
            builds and games; r as vu0.vert layer 7 has it, with bone A only) */
-        static struct { uint32_t tex; unsigned n, lit, hist[20], lwN, t3[3]; double lw; float edge, half; } rs[48];
+        static struct { uint32_t tex; unsigned n, lit, hist[20], lwN, t3[3], t5[5], tones, view; int cw[3]; double lw; float edge, half; } rs[48];
         static unsigned rsCount, rsFrame;
         const char *path = TexPack_Path(sAnimeStrip.entry[form]), *base = path, *c;
         uint32_t tex = 0, n;
@@ -4163,6 +4163,20 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
                     rs[q].t3[dd >= half ? 0 : dd < -half ? 2 : 1]++;
                     rs[q].half = half;
                 }
+                if (sAnimeStrip.tones[form] >= 4 && sAnimeStrip.tones[form] <= 5) {
+                    /* 4 or 5 tones (anime_capas.txt, Rev15): the tone of each point exactly as gs.frag mode 4 picks it */
+                    int *cw = rs[q].cw, nt = sAnimeStrip.tones[form], bk;
+                    float dd = (r - (rampEdge + rampDir * sAnimeStrip.cut[form])) * -rampDir, b0, b1, b2, b3;
+                    if (rs[q].tones == 0) {
+                        cw[0] = cw[1] = cw[2] = 0;
+                        TexPack_AnimeCapas(sAnimeStrip.entry[form], cw);
+                    }
+                    b0 = (float)(cw[0] + cw[1] + cw[2]) / 200.0f; b1 = b0 - cw[0] / 100.0f; b2 = b1 - cw[1] / 100.0f; b3 = b2 - cw[2] / 100.0f;
+                    bk = dd >= b0 ? 0 : dd >= b1 ? 1 : dd >= b2 ? 2 : (nt == 5 && dd >= b3) ? 3 : nt - 1;
+                    rs[q].t5[bk]++;
+                    rs[q].tones = (unsigned)nt;
+                    rs[q].view = viewSide != 0.0f;
+                }
             }
             rs[q].lw += lw;
             rs[q].lwN++;
@@ -4186,6 +4200,27 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
                 if (rs[q].half > 0.0f) {
                     fprintf(stderr, "anime: rtones %08x edge %.3f mid %.3f claro %.1f%% medio %.1f%% oscuro %.1f%% hist", rs[q].tex, rs[q].edge,
                             2.0f * rs[q].half, 100.0 * rs[q].t3[0] / rs[q].n, 100.0 * rs[q].t3[1] / rs[q].n, 100.0 * rs[q].t3[2] / rs[q].n);
+                    for (b = 0; b < 20; b++) {
+                        fprintf(stderr, " %u", (unsigned)(1000u * rs[q].hist[b] / rs[q].n));
+                    }
+                    fprintf(stderr, "\n");
+                }
+                if (rs[q].tones >= 4) {
+                    /* (Rev15) tono1 = block 0 of the file (the lit one; in anime_view the high r side = the RIGHT of
+                       the picture), the last one = the last block; izq-der = the same read from the left of the picture */
+                    unsigned t, nt = rs[q].tones;
+                    fprintf(stderr, "anime: rtonos %08x %u tonos edge %.3f capas %d %d %d %s", rs[q].tex, nt, rs[q].edge,
+                            rs[q].cw[0], rs[q].cw[1], rs[q].cw[2], rs[q].view ? "vista" : "luz");
+                    for (t = 0; t < nt; t++) {
+                        fprintf(stderr, " tono%u %.1f%%", t + 1, 100.0 * rs[q].t5[t] / rs[q].n);
+                    }
+                    if (rs[q].view) {
+                        fprintf(stderr, " izq-der");
+                        for (t = nt; t-- > 0;) {
+                            fprintf(stderr, " %.1f", 100.0 * rs[q].t5[t] / rs[q].n);
+                        }
+                    }
+                    fprintf(stderr, " hist");
                     for (b = 0; b < 20; b++) {
                         fprintf(stderr, " %u", (unsigned)(1000u * rs[q].hist[b] / rs[q].n));
                     }

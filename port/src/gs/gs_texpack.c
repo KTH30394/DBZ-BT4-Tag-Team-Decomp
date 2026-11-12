@@ -482,7 +482,7 @@ void TexPack_Init(void) {
         sBucket[h] = i + 1;
     }
     fprintf(stderr, "bt3: texture pack: %u replacement textures in %s (%u more with a name already seen)\n", sCount - dup, root, dup);
-    fprintf(stderr, "bt4 anime: build Rev14 (4 y 5 capas: anime_capas.txt; efecto esfera)\n");
+    fprintf(stderr, "bt4 anime: build Rev15 (registro rtonos: reparto real de 4 y 5 tonos; 4 y 5 capas; efecto esfera)\n");
 }
 
 int TexPack_Count(void) {
