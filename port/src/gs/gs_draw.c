@@ -1058,6 +1058,24 @@ static int anime_sk_count(const uint8_t *sk, int W, int H, int i) {
     for (k = 0; k < 8; k++) { int xx = cx + DX8[k], yy = cy + DY8[k]; if (xx >= 0 && yy >= 0 && xx < W && yy < H && sk[yy * W + xx]) c++; }
     return c;
 }
+/* (Rev26) 1 = a point of a colour is a darker shade of what is round it (within 2 texels a point at least 30 lighter in
+   R + G + B with the same shares of R, G, B, within 0.08): a dark blue fold on a blue shirt, a line; an iris on white or a
+   red stripe on blue is not */
+static int anime_same_tint_round(const uint8_t *tones, int W, int H, int i) {
+    const uint8_t *c = tones + i * 4;
+    int ax, ay, cx = i % W, cy = i / W;
+    float sc = (float)(c[0] + c[1] + c[2]) + 1.0f;
+    for (ay = cy - 2; ay <= cy + 2; ay++) for (ax = cx - 2; ax <= cx + 2; ax++) {
+        const uint8_t *d;
+        float sd;
+        if (ax < 0 || ay < 0 || ax >= W || ay >= H) continue;
+        d = tones + (ay * W + ax) * 4;
+        sd = (float)(d[0] + d[1] + d[2]) + 1.0f;
+        if (d[3] == 0 || sd < sc + 30.0f) continue;
+        if (fabsf(c[0] / sc - d[0] / sd) < 0.08f && fabsf(c[1] / sc - d[1] / sd) < 0.08f && fabsf(c[2] / sc - d[2] / sd) < 0.08f) return 1;
+    }
+    return 0;
+}
 /* (Rev26) a point beside a line is its soft grey edge (painted over) only if it is a darker shade of a colour next to it:
    a thin stripe of another colour between two lines (the red of Goku SSJ3's boots) was painted over with the colour beside
    it. 1 = a neighbour (no line) is lighter with the same tint (R, G, B in the same shares, within 0.06), or it is grey. */
@@ -1106,7 +1124,7 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
             const uint8_t *c = tones + i * 4;
             int mx = c[0] > c[1] ? (c[0] > c[2] ? c[0] : c[2]) : (c[1] > c[2] ? c[1] : c[2]);
             int mn = c[0] < c[1] ? (c[0] < c[2] ? c[0] : c[2]) : (c[1] < c[2] ? c[1] : c[2]);
-            if (mx - mn > 70 && mx > 100) continue; /* (red C02020 of a boot was taken for a line and painted blue) */
+            if (mx - mn > 70 && mx > 100 && !anime_same_tint_round(tones, W, H, i)) continue; /* (red C02020 of a boot was taken for a line and painted blue; a dark blue fold on blue is a line: the same tint as round it) */
         }
         mask[i] = 1;
     }
