@@ -152,7 +152,9 @@ void main() {
             bool faceT = p.extra.w < 0.0;
             float hhW = min(0.5 * abs(p.extra.w) * tpx, 6.0);
             float kThick = p.rect.z > 0.5 ? 2.0 : max(p.orig.w, 1.0);
-            float a0 = 0.25 * tpx, a1 = 0.75 * tpx, ink = 0.0, bestD = 1e6;
+            // (Rev31) soft half a pixel either side of the width (anime_lineas_grosor.txt, extra.w): Rev30's edge, black to a
+            // quarter pixel short and soft for 3/4 beyond, with the outline's width, came out about 3 pixels of the screen
+            float a0 = 0.5 * tpx, a1 = 0.5 * tpx, ink = 0.0, bestD = 1e6;
             vec2 bestCp = pt;
             if (tpx >= 1.0) {
                 vec2 sp0 = pt - 0.5;
@@ -221,7 +223,13 @@ void main() {
                 }
                 t.rgb = mix(base3, vec3(0.0), ink);
             } else if (ink > 0.0) {
-                t.rgb = mix(t.rgb, vec3(0.0), ink);
+                // (Rev31) a face: black only where its file has the line (as dark there against the tones with the lines
+                // painted over): the file's own shape, never wider (the user: Rev30's faces deformed by lines drawn over
+                // them; Rev21's, the file as it is, were right), its lines black at the width or thinner
+                vec3 clean = texture(tex, vec2(uv.x, vb + (blocks + block) / tot)).rgb;
+                float lc = dot(clean, vec3(0.299, 0.587, 0.114)), lt = dot(t.rgb, vec3(0.299, 0.587, 0.114));
+                float lineness = lc > 0.03 ? clamp((1.0 - lt / lc) * 2.5, 0.0, 1.0) : 0.0;
+                t.rgb = mix(t.rgb, vec3(0.0), ink * lineness);
             }
         }
 #endif

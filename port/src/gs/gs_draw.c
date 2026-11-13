@@ -1156,6 +1156,21 @@ static float anime_thick_times(int entry) {
 }
 static uint64_t sLinesHash; /* (the file anime_lines_make is working on: anime_lines_get) */
 static int anime_lines_face(int entry);
+/* (Rev31) the width every line inside a piece is drawn at, in PS2 pixels: textures/anime_lineas_grosor.txt, 0.4 */
+static float anime_lines_width(void) {
+    static float w = -1.0f;
+    if (w < 0.0f) {
+        FILE *f = fopen("textures/anime_lineas_grosor.txt", "r");
+        float v = 0.0f;
+        w = 0.4f;
+        if (f != NULL) {
+            if (fscanf(f, "%f", &v) == 1 && v >= 0.1f && v <= 3.0f) w = v;
+            fclose(f);
+        }
+        fprintf(stderr, "anime: grosor de las lineas %.2f (anime_lineas_grosor.txt)\n", w);
+    }
+    return w;
+}
 static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint32_t w, uint32_t h, int n, int face) {
     int W = (int)w, H = (int)h, N = W * H, i, x, y, k, t, changed, any = 0;
     uint8_t *tn = malloc((size_t)N * 4 * n);
@@ -1341,11 +1356,8 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
             int sx = dir == 0 ? 1 : 0, sy = dir == 0 ? 0 : 1, xb = x + sx, yb = y + sy, xa = x - sx, ya = y - sy, xc = xb + sx, yc = yb + sy;
             int jb, ja, jc, dd2, m, near = 0, ax, ay;
             const uint8_t *pi, *pb;
-            if (xb >= W || yb >= H) continue;
-            jb = yb * W + xb;
-            /* (Rev30) at the texture's edge the texel beyond is taken as like it (a band along the bottom had no line) */
-            ja = (xa < 0 || ya < 0) ? i : ya * W + xa;
-            jc = (xc >= W || yc >= H) ? jb : yc * W + xc;
+            if (xa < 0 || ya < 0 || xc >= W || yc >= H) continue;
+            jb = yb * W + xb; ja = ya * W + xa; jc = yc * W + xc;
             pi = tones + i * 4; pb = tones + jb * 4;
             if (pi[3] == 0 || pb[3] == 0 || tones[ja * 4 + 3] == 0 || tones[jc * 4 + 3] == 0) continue;
             dd2 = abs(pi[0] - pb[0]) + abs(pi[1] - pb[1]) + abs(pi[2] - pb[2]);
@@ -1363,9 +1375,8 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
                     fabsf(pi[2] / s1 - pb[2] / s2) < 0.06f) continue;
             }
             /* (both sides a colour, not a speck nor a soft step: the texel beyond each like it) */
-            /* (Rev30: or the texel beyond is a line, dark: a narrow stripe between lines, as on Goku SSJ3's boot) */
-            if (abs(pi[0] - tones[ja * 4]) + abs(pi[1] - tones[ja * 4 + 1]) + abs(pi[2] - tones[ja * 4 + 2]) > 90 && mask[ja] != 1 && lum_rgb(tones + ja * 4) >= 50.0f) continue;
-            if (abs(pb[0] - tones[jc * 4]) + abs(pb[1] - tones[jc * 4 + 1]) + abs(pb[2] - tones[jc * 4 + 2]) > 90 && mask[jc] != 1 && lum_rgb(tones + jc * 4) >= 50.0f) continue;
+            if (abs(pi[0] - tones[ja * 4]) + abs(pi[1] - tones[ja * 4 + 1]) + abs(pi[2] - tones[ja * 4 + 2]) > 90) continue;
+            if (abs(pb[0] - tones[jc * 4]) + abs(pb[1] - tones[jc * 4 + 1]) + abs(pb[2] - tones[jc * 4 + 2]) > 90) continue;
             for (ay = y - 1; ay <= yb + 1 && !near; ay++) for (ax = x - 1; ax <= xb + 1 && !near; ax++) {
                 if (ax < 0 || ay < 0 || ax >= W || ay >= H) continue;
                 m = ay * W + ax;
@@ -1383,8 +1394,8 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
     for (i = 0; i < N; i++) {
         int ax, ay, cx = i % W, cy = i / W;
         if (!addf[i]) continue;
-        /* (Rev30: within 1 texel only: a stripe's edge 2 texels off a line was left with none) */
-        for (ay = cy - 1; ay <= cy + 1 && addf[i]; ay++) for (ax = cx - 1; ax <= cx + 1 && addf[i]; ax++) {
+        /* (Rev31: 2 again, as Rev29: at 1 an added line ran beside a fold's own line, a double one (Goku's fly)) */
+        for (ay = cy - 2; ay <= cy + 2 && addf[i]; ay++) for (ax = cx - 2; ax <= cx + 2 && addf[i]; ax++) {
             if (ax < 0 || ay < 0 || ax >= W || ay >= H) continue;
             if (sk[ay * W + ax] && !addf[ay * W + ax]) addf[i] = 0;
         }
@@ -5094,7 +5105,10 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
                 /* (Rev29) the faces drawn as the rest too (the user: every line as thin, the face's as well): no longer negative */
                 /* (Rev30) a face negative again: its file shown as it is (as in Rev26: the user, its faces were right and
                    Rev29's redrawn ones broken), its lines only drawn over it where thinner than the outline (far away) */
-                a.portrait[1] = face ? -ow2 * (float)SCALE : ow2 * (float)SCALE;
+                /* (Rev31) the width from textures/anime_lineas_grosor.txt (PS2 pixels; Rev30 took the outline's 0.8 and with
+                   its soft edge they came out about three pixels of the screen: the user, "gordisimas") */
+                (void)ow2;
+                a.portrait[1] = face ? -anime_lines_width() * (float)SCALE : anime_lines_width() * (float)SCALE;
                 /* (Rev29) orig.w: how many times thicker the lines anime_lineas_gruesas.txt marks may get close up (gs.frag; a
                    sphere-effect draw keeps its alpha there and takes 2) */
                 a.orig[3] = sAnimeStrip.lines[form] ? anime_thick_times(sAnimeStrip.entry[form]) : 1.0f;
