@@ -114,7 +114,8 @@ void main() {
         // stretched (the edge one pixel soft, from how many texels a pixel covers).
         // (Rev24) with lines (extra.z > 0): the tones twice, as the file has them and with the lines painted over, then the
         // line block (gs_draw.c anime_lines_make: 2 * blocks + 1)
-        float lineBlk = p.extra.z > 0.0 ? 1.0 : 0.0, tot = lineBlk > 0.5 ? 2.0 * blocks + 1.0 : blocks;
+        // (Rev30) and after it the distance block: 2 * blocks + 2
+        float lineBlk = p.extra.z > 0.0 ? 1.0 : 0.0, tot = lineBlk > 0.5 ? 2.0 * blocks + 2.0 : blocks;
         vec2 tcl = uv * vec2(textureSize(tex, 0)) * vec2(1.0, 1.0 / tot);
         float tpx = max(length(dFdx(tcl)), length(dFdy(tcl))); // texels of the piece per pixel of the picture
         float vb = clamp(v / tot, h, 1.0 / tot - h);
@@ -133,79 +134,94 @@ void main() {
             // is no skeleton point: B = half the width of its line. G = 1: a line added between two colours (Rev26), always
             // drawn at the cap. On a face (extra.w < 0) the file's own lines are never drawn again, only the added ones.
             // A = 1 on a texel that is no skeleton point: something within a texel; 0 there and nothing else: no line near.
+            // (Rev30, 13-nov-2026) Every line black and as wide on the screen as the outline (|extra.w|, pixels of the picture),
+            // at any distance (the user: far away the lines faded to a darker shade of the colour round them, close up some
+            // were thicker; "todas las lineas, incluidas las de la cara, igual de lejos que de cerca"). Black up to a quarter
+            // pixel short of that half width, soft over the next pixel (the clean line the user showed: no saw teeth). Far
+            // away (a pixel over a texel or more) the distance to the nearest line comes from the distance block, read
+            // between its texels (gs_draw.c anime_lines_make: R = 1/30 texel, G = the line's G); close up, exactly, from
+            // the skeleton's segments round this pixel (3 x 3 texels: points at B, A, joined to the neighbours R marks).
+            // A line marked thicker (G 192..254, anime_lineas_gruesas.txt) grows up to orig.w times that close up, never past
+            // its own width in the file: as thin as the rest far away. Off a face the tones with the lines painted over are
+            // shown under the lines (each line only as drawn here); on a face (extra.w < 0) the file as it is, the lines
+            // drawn over it (where the file's are thinner than this, far away: they never fade nor break).
             ivec2 tsz = textureSize(tex, 0);
-            int bh = tsz.y / int(tot + 0.5), base = int(2.0 * blocks + 0.5) * bh;
+            int bh = tsz.y / int(tot + 0.5), base = int(2.0 * blocks + 0.5) * bh, sbase = base + bh;
             vec2 pt = vec2(fract(uv.x) * float(tsz.x), v * float(bh));
-            ivec2 c0 = ivec2(floor(pt)), q0 = c0;
-            q0.x = (q0.x % tsz.x + tsz.x) % tsz.x;
-            q0.y = clamp(q0.y, 0, bh - 1);
-            vec4 s0 = texelFetch(tex, ivec2(q0.x, q0.y + base), 0);
-            if (s0.g > 0.0 || s0.b > 0.0 || s0.a > 0.0) {
-                bool faceT = p.extra.w < 0.0;
-                float capWorld = 0.5 * p.extra.z * sqrt(float(tsz.x) * float(bh)), capScr = 0.5 * abs(p.extra.w) * tpx;
-                float capw = min(capWorld, capScr);
-                // (Rev29) the edge soft over a pixel and a half, as the cleanest line the user found (no saw teeth aslant); a
-                // line marked thicker (G 192..254, anime_lineas_gruesas.txt) may be up to orig.w times the screen cap, never
-                // more than the face's lines on the model: as thin as the rest far away, thicker only once close enough to tell
-                float aal = 0.75 * tpx, ink = 0.0, inkAdd = 0.0;
-                float kThick = p.rect.z > 0.5 ? 2.0 : max(p.orig.w, 1.0), capThick = min(capWorld, kThick * capScr);
-                bool over = false;
-                float bestD = 1e6; vec2 bestCp = pt; // (Rev29) the nearest point of any line drawn again here
-                const ivec2 nb[8] = ivec2[8](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1), ivec2(1, 1), ivec2(1, -1), ivec2(-1, 1), ivec2(-1, -1));
-                for (int dy = -1; dy <= 1; dy++) {
-                    for (int dx = -1; dx <= 1; dx++) {
-                        ivec2 cc = c0 + ivec2(dx, dy), qq = cc;
-                        qq.x = (qq.x % tsz.x + tsz.x) % tsz.x;
-                        qq.y = p.orig.y > 0.5 ? clamp(qq.y, 0, bh - 1) : (qq.y % bh + bh) % bh;
-                        vec4 sk = texelFetch(tex, ivec2(qq.x, qq.y + base), 0);
-                        if (sk.g <= 0.0) {
-                            if (!faceT && sk.b * 4.0 > capw + 0.02) over = true;
-                            continue;
+            ivec2 c0 = ivec2(floor(pt));
+            bool faceT = p.extra.w < 0.0;
+            float hhW = min(0.5 * abs(p.extra.w) * tpx, 6.0);
+            float kThick = p.rect.z > 0.5 ? 2.0 : max(p.orig.w, 1.0);
+            float a0 = 0.25 * tpx, a1 = 0.75 * tpx, ink = 0.0, bestD = 1e6;
+            vec2 bestCp = pt;
+            if (tpx >= 1.0) {
+                vec2 sp0 = pt - 0.5;
+                ivec2 i0 = ivec2(floor(sp0));
+                vec2 fr = sp0 - vec2(i0);
+                float dS = 0.0, dMin = 1e6, gS = 0.0;
+                for (int j = 0; j < 4; j++) {
+                    ivec2 qq = i0 + ivec2(j & 1, j >> 1);
+                    qq.x = (qq.x % tsz.x + tsz.x) % tsz.x;
+                    qq.y = p.orig.y > 0.5 ? clamp(qq.y, 0, bh - 1) : (qq.y % bh + bh) % bh;
+                    vec4 sd = texelFetch(tex, ivec2(qq.x, qq.y + sbase), 0);
+                    float dj = sd.r * 255.0 / 30.0;
+                    dS += dj * ((j & 1) == 1 ? fr.x : 1.0 - fr.x) * ((j >> 1) == 1 ? fr.y : 1.0 - fr.y);
+                    if (dj < dMin) { dMin = dj; gS = sd.g; }
+                }
+                if (gS > 0.0) {
+                    float g255S = gS * 255.0;
+                    float hhS = g255S > 191.5 && g255S < 254.5 ? clamp((g255S - 192.0) / 62.0 * 3.0, hhW, kThick * hhW) : hhW;
+                    ink = 1.0 - smoothstep(hhS - a0, hhS + a1, dS);
+                }
+            } else {
+                vec4 s0 = texelFetch(tex, ivec2((c0.x % tsz.x + tsz.x) % tsz.x, clamp(c0.y, 0, bh - 1) + sbase), 0);
+                if (s0.r * 255.0 / 30.0 < 3.0) {
+                    const ivec2 nb[8] = ivec2[8](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1), ivec2(1, 1), ivec2(1, -1), ivec2(-1, 1), ivec2(-1, -1));
+                    for (int dy = -1; dy <= 1; dy++) {
+                        for (int dx = -1; dx <= 1; dx++) {
+                            ivec2 cc = c0 + ivec2(dx, dy), qq = cc;
+                            qq.x = (qq.x % tsz.x + tsz.x) % tsz.x;
+                            qq.y = p.orig.y > 0.5 ? clamp(qq.y, 0, bh - 1) : (qq.y % bh + bh) % bh;
+                            vec4 sk = texelFetch(tex, ivec2(qq.x, qq.y + base), 0);
+                            if (sk.g <= 0.0) continue;
+                            float g255 = sk.g * 255.0;
+                            bool added = g255 > 254.5, thick = !added && g255 > 191.5;
+                            float hh = thick ? clamp((g255 - 192.0) / 62.0 * 3.0, hhW, kThick * hhW) : hhW;
+                            vec2 pa = vec2(cc) + 0.5 + (sk.ba - 0.5) * 2.0;
+                            float dist = length(pt - pa);
+                            vec2 cp = pa;
+                            int bits = int(sk.r * 255.0 + 0.5);
+                            for (int k = 0; k < 8; k++) {
+                                if ((bits & (1 << k)) == 0) continue;
+                                ivec2 cn = cc + nb[k], qn = cn;
+                                qn.x = (qn.x % tsz.x + tsz.x) % tsz.x;
+                                qn.y = p.orig.y > 0.5 ? clamp(qn.y, 0, bh - 1) : (qn.y % bh + bh) % bh;
+                                vec4 sn = texelFetch(tex, ivec2(qn.x, qn.y + base), 0);
+                                vec2 pb = vec2(cn) + 0.5 + (sn.ba - 0.5) * 2.0, e = pb - pa;
+                                float tt = clamp(dot(pt - pa, e) / max(dot(e, e), 1e-4), 0.0, 1.0);
+                                float dd = length(pt - pa - tt * e);
+                                if (dd < dist) { dist = dd; cp = pa + tt * e; }
+                            }
+                            ink = max(ink, 1.0 - smoothstep(hh - a0, hh + a1, dist));
+                            if (!added && dist < bestD) { bestD = dist; bestCp = cp; }
                         }
-                        float g255 = sk.g * 255.0;
-                        bool added = g255 > 254.5, thick = !added && g255 > 191.5;
-                        float hwl = thick ? (g255 - 192.0) / 62.0 * 3.0 : sk.g * 4.0;
-                        float hh = added ? capw : thick ? min(hwl, capThick) : min(hwl, capw), f1 = 1.0;
-                        if (hh < 0.5 * tpx) { f1 = hh / (0.5 * tpx); hh = 0.5 * tpx; }
-                        if (!added && !faceT && hwl > capw + 0.02) over = true;
-                        vec2 pa = vec2(cc) + 0.5 + (sk.ba - 0.5) * 2.0;
-                        float dist = length(pt - pa);
-                        vec2 cp = pa;
-                        int bits = int(sk.r * 255.0 + 0.5);
-                        for (int k = 0; k < 8; k++) {
-                            if ((bits & (1 << k)) == 0) continue;
-                            ivec2 cn = cc + nb[k], qn = cn;
-                            qn.x = (qn.x % tsz.x + tsz.x) % tsz.x;
-                            qn.y = p.orig.y > 0.5 ? clamp(qn.y, 0, bh - 1) : (qn.y % bh + bh) % bh;
-                            vec4 sn = texelFetch(tex, ivec2(qn.x, qn.y + base), 0);
-                            vec2 pb = vec2(cn) + 0.5 + (sn.ba - 0.5) * 2.0, e = pb - pa;
-                            float tt = clamp(dot(pt - pa, e) / max(dot(e, e), 1e-4), 0.0, 1.0);
-                            float dd = length(pt - pa - tt * e);
-                            if (dd < dist) { dist = dd; cp = pa + tt * e; }
-                        }
-                        float cov = (1.0 - smoothstep(hh - aal, hh + aal, dist)) * f1;
-                        ink = max(ink, cov);
-                        if (added) inkAdd = max(inkAdd, cov);
-                        if (!added && dist < bestD) { bestD = dist; bestCp = cp; }
                     }
                 }
-                if (over) {
-                    // (the alpha stays the file's: where it leaves the shading to the game, the game's, as in Rev21; a line
-                    // drawn again over such a place was seen as black dashes)
-                    vec3 base3 = texture(tex, vec2(uv.x, vb + (blocks + block) / tot)).rgb;
-                    if (bestD < 1.0 && bestD > 1e-3) {
-                        // (Rev29) within a texel of the line: the colour of this side a texel off the line, along the line's
-                        // own smooth course, so where two colours meet at a line drawn thinner their edge runs with it (the
-                        // texture's stair of texels was left showing beside the thin line: saw teeth)
-                        vec2 sp = bestCp + (pt - bestCp) / bestD * 1.0;
-                        float su = sp.x / float(tsz.x), sv = sp.y / float(bh);
-                        sv = p.orig.y > 0.5 ? clamp(sv, 0.0, 1.0) : fract(sv);
-                        base3 = texture(tex, vec2(su, clamp(sv / tot, h, 1.0 / tot - h) + (blocks + block) / tot)).rgb;
-                    }
-                    t.rgb = mix(base3, vec3(0.0), ink);
-                } else if (inkAdd > 0.0) {
-                    t.rgb = mix(t.rgb, vec3(0.0), inkAdd);
+            }
+            if (!faceT) {
+                // (the alpha stays the file's: where it leaves the shading to the game, the game's, as in Rev21)
+                vec3 base3 = texture(tex, vec2(uv.x, vb + (blocks + block) / tot)).rgb;
+                if (bestD < 1.0 && bestD > 1e-3) {
+                    // (Rev29) within a texel of the line: the colour of this side a texel off the line, along the line's
+                    // own smooth course (the texture's stair of texels beside a thin line: saw teeth)
+                    vec2 sp = bestCp + (pt - bestCp) / bestD * 1.0;
+                    float su = sp.x / float(tsz.x), sv = sp.y / float(bh);
+                    sv = p.orig.y > 0.5 ? clamp(sv, 0.0, 1.0) : fract(sv);
+                    base3 = texture(tex, vec2(su, clamp(sv / tot, h, 1.0 / tot - h) + (blocks + block) / tot)).rgb;
                 }
+                t.rgb = mix(base3, vec3(0.0), ink);
+            } else if (ink > 0.0) {
+                t.rgb = mix(t.rgb, vec3(0.0), ink);
             }
         }
 #endif

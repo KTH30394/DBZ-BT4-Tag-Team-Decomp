@@ -482,7 +482,7 @@ void TexPack_Init(void) {
         sBucket[h] = i + 1;
     }
     fprintf(stderr, "bt3: texture pack: %u replacement textures in %s (%u more with a name already seen)\n", sCount - dup, root, dup);
-    fprintf(stderr, "bt4 anime: build Rev29 (lineas suaves como la linea limpia; contorno suave sin dientes de sierra; caras redibujadas; M y ojos de Majin Vegeta al doble de cerca (anime_lineas_gruesas.txt); esqueleto minimo sin nudos; pliegues de color finos)\n");
+    fprintf(stderr, "bt4 anime: build Rev30 (todas las lineas negras y del ancho del contorno a cualquier distancia (bloque de distancias); contorno negro entero, suave por fuera, sin puntos ni puntas claras; caras como su archivo con las lineas encima de lejos; huecos de lineas rellenos; lineas grises de un texel en negro; franjas estrechas con linea)\n");
 }
 
 int TexPack_Count(void) {

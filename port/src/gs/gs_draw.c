@@ -1155,8 +1155,33 @@ static float anime_thick_times(int entry) {
     return m;
 }
 static uint64_t sLinesHash; /* (the file anime_lines_make is working on: anime_lines_get) */
-static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint32_t w, uint32_t h, int n) {
+static int anime_lines_face(int entry);
+static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint32_t w, uint32_t h, int n, int face) {
     int W = (int)w, H = (int)h, N = W * H, i, x, y, k, t, changed, any = 0;
+    uint8_t *tn = malloc((size_t)N * 4 * n);
+    if (tn != NULL) {
+        /* (Rev30, 13-nov-2026) A hole of one texel in a line, left to the game (alpha 0: the game's own colour there, a
+           dark blue or brown): between two opaque texels, beside a dark one. Off a face it is taken as the line it is
+           in, black and opaque (the user: lines half drawn, as the one beside the stripe of Goku SSJ3's boot, and of the
+           texture's darker colour, not black; 68 thousand such holes in the files). A face is left as its file is. */
+        memcpy(tn, tones, (size_t)N * 4 * n);
+        if (!face) for (t = 0; t < 3; t++) for (y = 0; y < H; y++) for (x = 0; x < W; x++) { /* (3 times: holes 3 in a row) */
+            int o = (y * W + x) * 4, dark = 0, ax, ay, lr, ud, b2;
+            if (tn[o + 3] != 0) continue;
+            lr = x > 0 && x < W - 1 && tn[o - 4 + 3] != 0 && tn[o + 4 + 3] != 0;
+            ud = y > 0 && y < H - 1 && tn[o - W * 4 + 3] != 0 && tn[o + W * 4 + 3] != 0;
+            if (!lr && !ud) continue;
+            for (ay = y - 1; ay <= y + 1 && !dark; ay++) for (ax = x - 1; ax <= x + 1 && !dark; ax++) {
+                const uint8_t *c2;
+                if (ax < 0 || ay < 0 || ax >= W || ay >= H) continue;
+                c2 = tn + (ay * W + ax) * 4;
+                if (c2[3] != 0 && lum_rgb(c2) < 60.0f) dark = 1;
+            }
+            if (!dark) continue;
+            for (b2 = 0; b2 < n; b2++) { uint8_t *p2 = tn + (size_t)b2 * N * 4 + o; p2[0] = p2[1] = p2[2] = 0; p2[3] = 255; }
+        }
+        tones = tn;
+    }
     float *Yo = malloc(sizeof(float) * N * 6), *Co = Yo + N, *Ya = Yo + 2 * N, *Ca = Yo + 3 * N, *tmp = Yo + 4 * N, *amt = Yo + 5 * N;
     float *dt = malloc(sizeof(float) * N * 3), *dc = dt + N, *hw = dt + 2 * N;
     int *lab = malloc(sizeof(int) * N * 3), *src = lab + N, *q = lab + 2 * N;
@@ -1173,6 +1198,19 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
     for (i = 0; i < N; i++) {
         int a0 = tones[i * 4 + 3] == 0;
         if (Co[i] < 8.0f || Co[i] - Yo[i] < 20.0f || Yo[i] / Co[i] > 0.88f) continue;
+        if (!a0 && !face && Ca[i] >= 8.0f && Ya[i] / Ca[i] > 0.6f && Ya[i] / Ca[i] <= 0.78f) {
+            /* (Rev30) a light grey line one texel wide (7E847B between gold and grey on Vegeta's armour): no colour, both
+               texels across it lighter: a line, drawn black (the user: every line black; it was left grey, and with
+               no line added beside it the two colours met without one). Not on a face (its file as it is). */
+            const uint8_t *c = tones + i * 4;
+            int mx = c[0] > c[1] ? (c[0] > c[2] ? c[0] : c[2]) : (c[1] > c[2] ? c[1] : c[2]);
+            int mn = c[0] < c[1] ? (c[0] < c[2] ? c[0] : c[2]) : (c[1] < c[2] ? c[1] : c[2]);
+            int cx = i % W, cy = i / W, thin = 0;
+            float yl = Ya[i] * 1.15f;
+            if (cx > 0 && cx < W - 1 && tones[(i - 1) * 4 + 3] && tones[(i + 1) * 4 + 3] && Ya[i - 1] > yl && Ya[i + 1] > yl) thin = 1;
+            if (cy > 0 && cy < H - 1 && tones[(i - W) * 4 + 3] && tones[(i + W) * 4 + 3] && Ya[i - W] > yl && Ya[i + W] > yl) thin = 1;
+            if (mx - mn < 40 && thin) { mask[i] = 1; continue; }
+        }
         if (!a0 && (Ca[i] < 8.0f || Ya[i] / Ca[i] > 0.6f)) continue; /* (only what the file shows dark: not a ring the file took out, as a flat iris's, nor the inside of an eyebrow) */
         if (!a0) { /* (Rev26) nor a colour: an iris (3999A5) is darker than the white round it but is no line (it was drawn
                       again as one, and it kept the line round it from being added) */
@@ -1303,8 +1341,11 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
             int sx = dir == 0 ? 1 : 0, sy = dir == 0 ? 0 : 1, xb = x + sx, yb = y + sy, xa = x - sx, ya = y - sy, xc = xb + sx, yc = yb + sy;
             int jb, ja, jc, dd2, m, near = 0, ax, ay;
             const uint8_t *pi, *pb;
-            if (xa < 0 || ya < 0 || xc >= W || yc >= H) continue;
-            jb = yb * W + xb; ja = ya * W + xa; jc = yc * W + xc;
+            if (xb >= W || yb >= H) continue;
+            jb = yb * W + xb;
+            /* (Rev30) at the texture's edge the texel beyond is taken as like it (a band along the bottom had no line) */
+            ja = (xa < 0 || ya < 0) ? i : ya * W + xa;
+            jc = (xc >= W || yc >= H) ? jb : yc * W + xc;
             pi = tones + i * 4; pb = tones + jb * 4;
             if (pi[3] == 0 || pb[3] == 0 || tones[ja * 4 + 3] == 0 || tones[jc * 4 + 3] == 0) continue;
             dd2 = abs(pi[0] - pb[0]) + abs(pi[1] - pb[1]) + abs(pi[2] - pb[2]);
@@ -1322,8 +1363,9 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
                     fabsf(pi[2] / s1 - pb[2] / s2) < 0.06f) continue;
             }
             /* (both sides a colour, not a speck nor a soft step: the texel beyond each like it) */
-            if (abs(pi[0] - tones[ja * 4]) + abs(pi[1] - tones[ja * 4 + 1]) + abs(pi[2] - tones[ja * 4 + 2]) > 90) continue;
-            if (abs(pb[0] - tones[jc * 4]) + abs(pb[1] - tones[jc * 4 + 1]) + abs(pb[2] - tones[jc * 4 + 2]) > 90) continue;
+            /* (Rev30: or the texel beyond is a line, dark: a narrow stripe between lines, as on Goku SSJ3's boot) */
+            if (abs(pi[0] - tones[ja * 4]) + abs(pi[1] - tones[ja * 4 + 1]) + abs(pi[2] - tones[ja * 4 + 2]) > 90 && mask[ja] != 1 && lum_rgb(tones + ja * 4) >= 50.0f) continue;
+            if (abs(pb[0] - tones[jc * 4]) + abs(pb[1] - tones[jc * 4 + 1]) + abs(pb[2] - tones[jc * 4 + 2]) > 90 && mask[jc] != 1 && lum_rgb(tones + jc * 4) >= 50.0f) continue;
             for (ay = y - 1; ay <= yb + 1 && !near; ay++) for (ax = x - 1; ax <= xb + 1 && !near; ax++) {
                 if (ax < 0 || ay < 0 || ax >= W || ay >= H) continue;
                 m = ay * W + ax;
@@ -1341,7 +1383,8 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
     for (i = 0; i < N; i++) {
         int ax, ay, cx = i % W, cy = i / W;
         if (!addf[i]) continue;
-        for (ay = cy - 2; ay <= cy + 2 && addf[i]; ay++) for (ax = cx - 2; ax <= cx + 2 && addf[i]; ax++) {
+        /* (Rev30: within 1 texel only: a stripe's edge 2 texels off a line was left with none) */
+        for (ay = cy - 1; ay <= cy + 1 && addf[i]; ay++) for (ax = cx - 1; ax <= cx + 1 && addf[i]; ax++) {
             if (ax < 0 || ay < 0 || ax >= W || ay >= H) continue;
             if (sk[ay * W + ax] && !addf[ay * W + ax]) addf[i] = 0;
         }
@@ -1483,7 +1526,7 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
         for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k]; if (xx >= 0 && yy >= 0 && xx < W && yy < H && inp[yy * W + xx] == 1) { inp[i] = 2; break; } } }
     /* (Rev24) the tone blocks twice: as the file has them (what is shown where no line is wider than the cap: the line as
        it is, as in Rev21), then with the lines painted over (where one is wider: gs.frag draws it again, thinner) */
-    out = malloc((size_t)N * 4 * (2 * n + 1));
+    out = malloc((size_t)N * 4 * (2 * n + 2)); /* (Rev30: + the distance block) */
     if (out == NULL) goto done;
     memcpy(out, tones, (size_t)N * 4 * n);
     memcpy(out + (size_t)N * 4 * n, tones, (size_t)N * 4 * n);
@@ -1556,9 +1599,53 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
                     if (sk[yy * W + xx] || inp[yy * W + xx]) nearL = 1;
                 }
                 L[i * 4 + 3] = nearL ? 255 : 0;
-            } } }
+            } }
+        /* (Rev30, 13-nov-2026) one more block: R = the distance from each texel's middle to the nearest line drawn again
+           (the point and the segments to its neighbours, as gs.frag draws them), in 1/30 texel (255: 8.5 texels or more),
+           G = that line's G. gs.frag reads it between texels (smooth): far away, where a pixel spans several texels, every
+           line is still drawn as wide on the screen as the outline (the user: every line as thick at any distance, black;
+           the 3 x 3 texels gs.frag looks at could not reach that far, and the lines faded to the colour round them) */
+        {
+            uint8_t *S = L + (size_t)N * 4;
+            float *best = tmp; /* (the offsets are in L by now) */
+            for (i = 0; i < N; i++) { best[i] = 8.5f; S[i * 4] = 255; S[i * 4 + 1] = 0; S[i * 4 + 2] = 0; S[i * 4 + 3] = 255; }
+            for (i = 0; i < N; i++) {
+                int cx = i % W, cy = i / W, bits, kk, ax, ay, ns = 0, s2;
+                float ax0, ay0, ex2[5], ey2[5];
+                if (L[i * 4 + 1] == 0) continue;
+                ax0 = (float)cx + 0.5f + ((float)L[i * 4 + 2] / 255.0f - 0.5f) * 2.0f;
+                ay0 = (float)cy + 0.5f + ((float)L[i * 4 + 3] / 255.0f - 0.5f) * 2.0f;
+                bits = L[i * 4];
+                ex2[0] = ey2[0] = 0.0f; ns = 1; /* (the point itself, then its segments E, S, SE, SW: each one once) */
+                for (kk = 0; kk < 8; kk++) {
+                    int xx = cx + DX[kk], yy = cy + DY[kk], jj;
+                    if ((kk != 0 && kk != 2 && kk != 4 && kk != 6) || !(bits & (1 << kk)) || yy < 0 || yy >= H || xx < 0 || xx >= W) continue;
+                    jj = yy * W + xx;
+                    if (L[jj * 4 + 1] == 0) continue;
+                    ex2[ns] = (float)xx + 0.5f + ((float)L[jj * 4 + 2] / 255.0f - 0.5f) * 2.0f - ax0;
+                    ey2[ns] = (float)yy + 0.5f + ((float)L[jj * 4 + 3] / 255.0f - 0.5f) * 2.0f - ay0;
+                    ns++;
+                }
+                for (ay = cy - 9; ay <= cy + 10; ay++) {
+                    if (ay < 0 || ay >= H) continue;
+                    for (ax = cx - 9; ax <= cx + 10; ax++) {
+                        int xx = (ax % W + W) % W, jj = ay * W + xx;
+                        float px = (float)ax + 0.5f - ax0, py = (float)ay + 0.5f - ay0, dmin = 1e9f;
+                        for (s2 = 0; s2 < ns; s2++) {
+                            float ee = ex2[s2] * ex2[s2] + ey2[s2] * ey2[s2], tt = ee > 1e-6f ? (px * ex2[s2] + py * ey2[s2]) / ee : 0.0f, vx, vy;
+                            tt = tt < 0.0f ? 0.0f : tt > 1.0f ? 1.0f : tt;
+                            vx = px - tt * ex2[s2]; vy = py - tt * ey2[s2];
+                            dmin = fminf(dmin, vx * vx + vy * vy);
+                        }
+                        dmin = sqrtf(dmin);
+                        if (dmin < best[jj]) { best[jj] = dmin; S[jj * 4 + 1] = L[i * 4 + 1]; }
+                    }
+                }
+            }
+            for (i = 0; i < N; i++) S[i * 4] = best[i] >= 8.45f ? 255 : (uint8_t)fminf(254.0f, best[i] * 30.0f + 0.5f);
+        } }
 done:
-    free(Yo); free(dt); free(lab); free(mask); free(sk); free(inp); free(ex); free(addf); free(aox);
+    free(Yo); free(dt); free(lab); free(mask); free(sk); free(inp); free(ex); free(addf); free(aox); free(tn);
     return out;
 }
 /* (made once a file: the same file comes again with every palette, every flash) */
@@ -1572,7 +1659,7 @@ static const uint8_t *anime_lines_get(int id, const uint8_t *tones, const uint8_
     c[k].id = id; c[k].w = w; c[k].h = h; c[k].n = n;
     anime_thick_read();
     sLinesHash = anime_name_hash(TexPack_Path(id)); /* (Rev29: its lines marked thicker, anime_lineas_gruesas.txt) */
-    c[k].data = getenv("BT3_NO_LINES") != NULL ? NULL : anime_lines_make(tones, orig, w, h, n);
+    c[k].data = getenv("BT3_NO_LINES") != NULL ? NULL : anime_lines_make(tones, orig, w, h, n, anime_lines_face(id));
     c[k].none = c[k].data == NULL;
     return c[k].data;
 }
@@ -1664,8 +1751,8 @@ static GsTex anime_texture(int id, int other, const uint32_t *px, uint32_t w, ui
             const uint8_t *aug = anime_lines_get(id, img.data[0], fileOriginal, w, h, n);
             if (aug != NULL) {
                 img.data[0] = aug;
-                img.h = (uint32_t)(2 * n + 1) * h;
-                img.bytes[0] = w * h * (2 * n + 1) * 4;
+                img.h = (uint32_t)(2 * n + 2) * h;
+                img.bytes[0] = w * h * (2 * n + 2) * 4;
                 *lines = 1;
             }
         }
@@ -1725,7 +1812,7 @@ static GsTex anime_texture(int id, int other, const uint32_t *px, uint32_t w, ui
             return tex;
         }
         /* (a copy: the one held stays the original's) */
-        int blk = *lines ? 2 * n + 1 : n, toneBlk = *lines ? 2 * n : n; /* (Rev24: both sets of tones get the flash) */
+        int blk = *lines ? 2 * n + 2 : n, toneBlk = *lines ? 2 * n : n; /* (Rev24: both sets of tones get the flash) */
         a = (uint8_t *)malloc((size_t)w * h * blk * 4);
         if (a == NULL) {
             return 0;
@@ -5005,7 +5092,9 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
                 float od2, ow2;
                 GsDraw_OutlineLook(&od2, &ow2);
                 /* (Rev29) the faces drawn as the rest too (the user: every line as thin, the face's as well): no longer negative */
-                a.portrait[1] = ow2 * (float)SCALE;
+                /* (Rev30) a face negative again: its file shown as it is (as in Rev26: the user, its faces were right and
+                   Rev29's redrawn ones broken), its lines only drawn over it where thinner than the outline (far away) */
+                a.portrait[1] = face ? -ow2 * (float)SCALE : ow2 * (float)SCALE;
                 /* (Rev29) orig.w: how many times thicker the lines anime_lineas_gruesas.txt marks may get close up (gs.frag; a
                    sphere-effect draw keeps its alpha there and takes 2) */
                 a.orig[3] = sAnimeStrip.lines[form] ? anime_thick_times(sAnimeStrip.entry[form]) : 1.0f;
