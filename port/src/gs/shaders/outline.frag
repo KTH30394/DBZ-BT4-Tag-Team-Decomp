@@ -10,6 +10,10 @@ layout(location = 0) out vec4 outColor;
 layout(set = 2, binding = 0) uniform sampler2D aux; // .r = the GS alpha byte / 255
 layout(set = 3, binding = 0) uniform Params {
     vec4 step; // x: the line's width across in uv, y: one PS2 pixel down in uv, z: darkness (0x64 / 255)
+#ifndef NO_CAP
+    vec4 cap[4]; // (Rev24) for each fighter (its row of the alpha table: id / 15), the share of the width it is drawn at
+                 // (gs_draw.c GsDraw_OutlineCaps: no wider than the lines inside, anime_lineas.txt); 0 = as it is
+#endif
 } p;
 float table(vec2 uv) {
     int id = int(texture(aux, uv).r * 255.0 + 0.5);
@@ -23,6 +27,7 @@ void main() {
     // measured in texels of the image: a texel at distance d from the edge darkens by clamp(width - d + 1, 0, 1),
     // which gives lines of the same thickness at any shape (a fraction of a texel as a lighter last texel).
     float tx = 1.0 / float(textureSize(aux, 0).x), width = p.step.x / tx;
+    float dy = p.step.y;
     float here = table(vUv);
     // Nothing to subtract (the pipeline: picture minus this, colour only), so nothing is written: the same picture,
     // without reading and writing back every pixel of the screen. A place with no object (the table's 0: stage,
@@ -30,7 +35,19 @@ void main() {
     if (here == 0.0 && p.step.w == 0.0) {
         discard;
     }
-    float down = table(vUv + vec2(0.0, p.step.y)), up = table(vUv - vec2(0.0, p.step.y));
+#ifndef NO_CAP
+    {
+        // (Rev24) a fighter far away: its outline no wider than its lines (never under one pixel of the picture)
+        int id = int(texture(aux, vUv).r * 255.0 + 0.5) & 127, row = id / 15;
+        float share = row < 16 ? p.cap[row / 4][row % 4] : 0.0;
+        if (share > 0.0 && share < 1.0) {
+            float ty = 1.0 / float(textureSize(aux, 0).y);
+            width = min(width, max(width * share, 1.0));
+            dy = min(dy, max(dy * share, ty));
+        }
+    }
+#endif
+    float down = table(vUv + vec2(0.0, dy)), up = table(vUv - vec2(0.0, dy));
     // the subtraction keeps only positive differences: the line is drawn on the side with the larger value
     float amount = here > down || here > up ? 1.0 : 0.0;
     for (int k = 1; k <= 8 && float(k) < width + 1.0; k++) {

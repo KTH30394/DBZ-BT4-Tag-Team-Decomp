@@ -187,5 +187,8 @@ void GsGpu_TitlePoll(void); /* gs_draw.c */
 /* gs_draw.c: the outline (outline.frag) from textures/anime_outline.txt, "<darkness> <width>": how much it takes off each
    colour channel (0..255, the game's own 100 without the file) and how thick it is (PS2 pixels, 0.5..3, 1 without one) */
 void GsDraw_OutlineLook(float *darkness, float *width);
+/* gs_draw.c (Rev24): for each fighter's row of the alpha table (id / 15), the share of the outline's width it is drawn at
+   (the lines' cap, anime_lineas.txt, at its distance now); 0 = as it is. outline.frag's cap[]. */
+void GsDraw_OutlineCaps(float caps[16]);
 
 #endif

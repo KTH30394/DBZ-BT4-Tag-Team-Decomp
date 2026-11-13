@@ -1041,7 +1041,8 @@ static double anime_fit(const uint8_t *o, const uint8_t *n, uint32_t count, doub
    thins as it ends). The tone blocks get the colour round the line where the line was (so nothing of the old line,
    blurred when the texture is stretched, is left), and one more block after them holds R = distance / 8 texels,
    G = half the width / 8 texels. gs.frag draws the line black from that, as wide as it was but never wider than the
-   outline, sharp at any size. NULL: no lines (the file uploaded as before). (n + 1) blocks, freed by the caller. */
+   outline, sharp at any size. NULL: no lines (the file uploaded as before). (n + 1) blocks, freed by the caller.
+   Rev24: (2n + 1) blocks: the n tones as the file has them, the n tones with the lines painted over, the line block. */
 static float lum_rgb(const uint8_t *q) { return 0.114f * q[0] + 0.587f * q[1] + 0.299f * q[2]; }
 static void anime_close(const float *Y, float *out, float *tmp, int w, int h, int r) {
     int x, y, k;
@@ -1150,6 +1151,9 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
             ox = (float)(ax - cx); oy = (float)(ay - cy); sxx += ox * ox; syy += oy * oy; sxy += ox * oy;
             if (ax >= cx - 1 && ax <= cx + 1 && ay >= cy - 1 && ay <= cy + 1) { s += tmp[jj]; cn++; } }
         hw[i] = 0.5f * s / (float)(cn > 0 ? cn : 1);
+        /* (Rev24) never more than the distance from there to the line's side: at an end or where two lines meet, the points
+           nearest to it are more than its width across (a 1 or 2 texel line measured 3 there: seen in a close-up) */
+        hw[i] = fminf(hw[i], dt[i]);
         (void)sxx; (void)syy; (void)sxy; }
     /* (Rev23) the line drawn straight, not in a zigzag (the folds by the trousers' fly, Broly SSJ3's hair): spurs of one or
        two points off a crossing are taken out; each skeleton point goes where the line really is (the middle of the
@@ -1172,6 +1176,44 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
                 prev = cur; cur = nx;
             }
             if (junction && np <= 2) for (k = 0; k < np; k++) sk[path[k]] = 0;
+        }
+        {
+            /* (Rev24) a line broken by a lighter texel or two (the files' lines have such breaks; drawn again they were gaps
+               with round ends, seen in a close-up): from each end of a run, the nearest skeleton point up to 3 texels ahead
+               (in the run's way, not one of its own last points) is joined to it by a straight row of skeleton points */
+            int nbr = 0, maxbr = N / 2, b2;
+            for (i = 0; i < N; i++) lab[i] = -1;
+            for (i = 0; i < N && nbr < maxbr; i++) {
+                int run[6], nr = 0, cur = i, prev = -1, step, cx = i % W, cy = i / W, best = -1, ax, ay;
+                float ddx, ddy, dl, bd = 1e9f;
+                if (!sk[i] || anime_sk_count(sk, W, H, i) != 1) continue;
+                run[nr++] = i; lab[i] = i;
+                for (step = 0; step < 5; step++) {
+                    int px = cur % W, py = cur / W, nx = -1, cnt = 0, jj;
+                    for (k = 0; k < 8; k++) { int xx = px + DX[k], yy = py + DY[k]; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; jj = yy * W + xx;
+                        if (!sk[jj] || jj == prev || lab[jj] == i) continue; cnt++; nx = jj; }
+                    if (cnt != 1) break;
+                    run[nr++] = nx; lab[nx] = i; prev = cur; cur = nx;
+                }
+                if (nr < 3) continue;
+                ddx = (float)(cx - run[nr - 1] % W); ddy = (float)(cy - run[nr - 1] / W); dl = sqrtf(ddx * ddx + ddy * ddy);
+                if (dl < 1e-3f) continue;
+                for (ay = cy - 3; ay <= cy + 3; ay++) for (ax = cx - 3; ax <= cx + 3; ax++) { int jj; float vx, vy, dd;
+                    if (ax < 0 || ay < 0 || ax >= W || ay >= H) continue; jj = ay * W + ax; if (!sk[jj] || lab[jj] == i) continue;
+                    vx = (float)(ax - cx); vy = (float)(ay - cy); dd = sqrtf(vx * vx + vy * vy);
+                    if (dd < 1.5f || dd > 3.2f || (vx * ddx + vy * ddy) / (dd * dl) < 0.7f) continue;
+                    if (dd < bd) { bd = dd; best = jj; } }
+                if (best >= 0) { q[2 * nbr] = i; q[2 * nbr + 1] = best; nbr++; }
+            }
+            for (b2 = 0; b2 < nbr; b2++) {
+                int e = q[2 * b2], f = q[2 * b2 + 1], ex2 = e % W, ey2 = e / W, fx = f % W, fy = f / W, st, ns2;
+                float hwm = 0.5f * (hw[e] + hw[f]);
+                ns2 = abs(fx - ex2) > abs(fy - ey2) ? abs(fx - ex2) : abs(fy - ey2);
+                for (st = 1; st < ns2; st++) {
+                    int xx = ex2 + (int)lroundf((float)(fx - ex2) * st / ns2), yy = ey2 + (int)lroundf((float)(fy - ey2) * st / ns2), jj = yy * W + xx;
+                    if (!sk[jj]) { sk[jj] = 1; hw[jj] = hwm; }
+                }
+            }
         }
         for (i = 0; i < N; i++) { PX[i] = PY[i] = WS[i] = 0.0f; }
         for (i = 0; i < N; i++) { int s2 = src[i]; float wgt; if (mask[i] != 1 || s2 < 0 || !sk[s2]) continue;
@@ -1197,11 +1239,18 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
         if (mask[i] == 1) { inp[i] = 1; continue; }
         if (mask[i] != 0 || tones[i * 4 + 3] == 0 || Ca[i] < 8.0f) continue;
         for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k]; if (xx >= 0 && yy >= 0 && xx < W && yy < H && mask[yy * W + xx] == 1) { if (Ya[i] < 0.93f * Ca[i]) inp[i] = 1; break; } } }
-    out = malloc((size_t)N * 4 * (n + 1));
+    /* (Rev24) and one point further, where still darker than round it (a grey shadow was left beside a line drawn again) */
+    for (i = 0; i < N; i++) { int cx = i % W, cy = i / W;
+        if (inp[i] || mask[i] != 0 || tones[i * 4 + 3] == 0 || Ca[i] < 8.0f || Ya[i] >= 0.9f * Ca[i]) continue;
+        for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k]; if (xx >= 0 && yy >= 0 && xx < W && yy < H && inp[yy * W + xx] == 1) { inp[i] = 2; break; } } }
+    /* (Rev24) the tone blocks twice: as the file has them (what is shown where no line is wider than the cap: the line as
+       it is, as in Rev21), then with the lines painted over (where one is wider: gs.frag draws it again, thinner) */
+    out = malloc((size_t)N * 4 * (2 * n + 1));
     if (out == NULL) goto done;
     memcpy(out, tones, (size_t)N * 4 * n);
+    memcpy(out + (size_t)N * 4 * n, tones, (size_t)N * 4 * n);
     /* the tone blocks: where a line was, the colour round it (nearest point that is no line), opaque */
-    for (t = 0; t < n; t++) {
+    for (t = n; t < 2 * n; t++) {
         uint8_t *b = out + (size_t)t * N * 4;
         int head = 0, tail = 0;
         for (i = 0; i < N; i++) { lab[i] = inp[i] ? -1 : (b[i * 4 + 3] != 0 ? 1 : 0); if (lab[i] == 1) { int cx = i % W, cy = i / W, edge = 0;
@@ -1211,17 +1260,29 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
                 if (lab[jj] == -1) { memcpy(b + jj * 4, b + c * 4, 3); b[jj * 4 + 3] = 255; lab[jj] = 1; q[tail++] = jj; } } }
         for (i = 0; i < N; i++) if (lab[i] == -1) { b[i * 4] = b[i * 4 + 1] = b[i * 4 + 2] = 0; b[i * 4 + 3] = 255; } /* (nothing round it: black) */
     }
-    { uint8_t *L = out + (size_t)n * N * 4;
+    { uint8_t *L = out + (size_t)2 * n * N * 4;
+        /* (Rev24) the half width of the line each painted-over point belongs to (its nearest skeleton point's; the soft edge
+           beside a line: its neighbour's), so gs.frag knows there whether that line is wider than the cap */
+        float *own = Yo; /* (Yo is not needed any more) */
+        for (i = 0; i < N; i++) own[i] = (mask[i] == 1 && src[i] >= 0) ? hw[src[i]] : 0.0f;
+        for (i = 0; i < N; i++) { int cx = i % W, cy = i / W; if (!inp[i] || mask[i] == 1) continue;
+            for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k], jj; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; jj = yy * W + xx;
+                if (mask[jj] == 1 && src[jj] >= 0) own[i] = fmaxf(own[i], hw[src[jj]]); } }
+        for (i = 0; i < N; i++) { int cx = i % W, cy = i / W; if (inp[i] != 2) continue; /* (the point further: its neighbour's) */
+            for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k], jj; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; jj = yy * W + xx;
+                if (inp[jj] == 1) own[i] = fmaxf(own[i], own[jj]); } }
         /* each skeleton point: R = which of its 8 neighbours are skeleton too (a bit each: E, W, S, N, SE, NE, SW, NW as
            DX / DY), G = half the width / 4 texels (0 = no skeleton point), B, A = where the point is from its texel's middle (x, y,
-           -0.5..0.5). gs.frag draws the segments from each point to its neighbours: the line whole, smooth, at any size */
+           -1..1). gs.frag draws the segments from each point to its neighbours: the line whole, smooth, at any size.
+           Any other point painted over: R = G = 0, B = the half width of its line / 4 texels, A = 0 */
         for (i = 0; i < N; i++) {
             int cx = i % W, cy = i / W, bits = 0;
             if (sk[i]) for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k]; if (xx >= 0 && yy >= 0 && xx < W && yy < H && sk[yy * W + xx]) bits |= 1 << k; }
             L[i * 4] = (uint8_t)bits;
             L[i * 4 + 1] = sk[i] ? (uint8_t)(fmaxf(1.0f, fminf(hw[i], 4.0f) / 4.0f * 255.0f + 0.5f)) : 0;
-            L[i * 4 + 2] = sk[i] ? (uint8_t)((fmaxf(-1.0f, fminf(1.0f, tmp[i])) * 0.5f + 0.5f) * 255.0f + 0.5f) : 128;
-            L[i * 4 + 3] = sk[i] ? (uint8_t)((fmaxf(-1.0f, fminf(1.0f, dc[i])) * 0.5f + 0.5f) * 255.0f + 0.5f) : 128; } }
+            L[i * 4 + 2] = sk[i] ? (uint8_t)((fmaxf(-1.0f, fminf(1.0f, tmp[i])) * 0.5f + 0.5f) * 255.0f + 0.5f)
+                         : inp[i] ? (uint8_t)(fmaxf(1.0f, fminf(own[i], 4.0f) / 4.0f * 255.0f + 0.5f)) : 0;
+            L[i * 4 + 3] = sk[i] ? (uint8_t)((fmaxf(-1.0f, fminf(1.0f, dc[i])) * 0.5f + 0.5f) * 255.0f + 0.5f) : 0; } }
 done:
     free(Yo); free(dt); free(lab); free(mask); free(sk); free(inp); free(ex);
     return out;
@@ -1327,8 +1388,8 @@ static GsTex anime_texture(int id, int other, const uint32_t *px, uint32_t w, ui
             const uint8_t *aug = anime_lines_get(id, img.data[0], fileOriginal, w, h, n);
             if (aug != NULL) {
                 img.data[0] = aug;
-                img.h = (uint32_t)(n + 1) * h;
-                img.bytes[0] = w * h * (n + 1) * 4;
+                img.h = (uint32_t)(2 * n + 1) * h;
+                img.bytes[0] = w * h * (2 * n + 1) * 4;
                 *lines = 1;
             }
         }
@@ -1388,13 +1449,14 @@ static GsTex anime_texture(int id, int other, const uint32_t *px, uint32_t w, ui
             return tex;
         }
         /* (a copy: the one held stays the original's) */
-        a = (uint8_t *)malloc((size_t)w * h * (n + *lines) * 4);
+        int blk = *lines ? 2 * n + 1 : n, toneBlk = *lines ? 2 * n : n; /* (Rev24: both sets of tones get the flash) */
+        a = (uint8_t *)malloc((size_t)w * h * blk * 4);
         if (a == NULL) {
             return 0;
         }
-        memcpy(a, img.data[0], (size_t)w * h * (n + *lines) * 4);
+        memcpy(a, img.data[0], (size_t)w * h * blk * 4);
         img.data[0] = a;
-        img.bytes[0] = w * h * (n + *lines) * 4;
+        img.bytes[0] = w * h * blk * 4;
         for (y = 0; y < h; y++) {
             for (x = 0; x < w; x++) {
                 for (k = 0; k < 3; k++) {
@@ -1402,7 +1464,7 @@ static GsTex anime_texture(int id, int other, const uint32_t *px, uint32_t w, ui
                     if (add <= 0) {
                         continue;
                     }
-                    for (b = 0; b < n; b++) {
+                    for (b = 0; b < toneBlk; b++) {
                         v = a[((y + b * h) * w + x) * 4 + k] + add;
                         a[((y + b * h) * w + x) * 4 + k] = (uint8_t)(v > 255 ? 255 : v);
                     }
@@ -3876,6 +3938,160 @@ void GsDraw_OutlineLook(float *darkness, float *width) {
     *width = wide;
 }
 
+/* (Rev24, 13-nov-2026) The widest a line is drawn, as a width ON THE MODEL (so the same on every piece and at any distance
+   from the camera; Rev22/23 had it in pixels of the screen, and in a close-up the lines of a face came out a pixel wide,
+   in pieces). textures/anime_lineas.txt: in texels of Goku SSJ2's face texture (e5cc7221, 47.13 texels a unit of the
+   model, Herramientas\densidad.ps1), whose lines (eyes, eyebrows, under the eyes) are 1 texel wide, 1.5 the wider ones,
+   2 the widest (lineas_vista.ps1); without it, 1.6 (as wide as the outline Rev22 had them, liked, at the museum's
+   distance, where a texel of that face is about a pixel). Returned in units of the model. */
+static float anime_lines_cap(void) {
+    static float cap = -1.0f;
+    if (cap < 0.0f) {
+        float v = 1.6f;
+        FILE *f = fopen("textures/anime_lineas.txt", "r");
+        if (f != NULL) {
+            float r;
+            if (fscanf(f, "%f", &r) == 1 && r >= 0.2f && r <= 8.0f) v = r;
+            fclose(f);
+        }
+        cap = v / 47.13f;
+        fprintf(stderr, "anime: lineas como mucho %.2f texels de la cara de Goku SSJ2 = %.4f unidades del modelo (anime_lineas.txt)\n", v, cap);
+    }
+    return cap;
+}
+
+/* 1 = the anime file `entry` is a face's, eyes' or mouth's (textures/anime_lineas_caras.txt, by the first number of its name;
+   Herramientas\lineas_caras.ps1 lists them from the models): its lines are the cap's own measure, left as the file has them
+   (a face's thick eyelid drawn again at the cap, and the iris round it painted over, looked worse in a close-up). */
+static int anime_lines_face(int entry) {
+    static uint64_t *list;
+    static int n = -1;
+    static struct { int entry, face; } seen[512];
+    static int ns;
+    const char *path, *base, *c;
+    uint64_t h = 0;
+    int k, lo, hi;
+    for (k = 0; k < ns; k++) if (seen[k].entry == entry) return seen[k].face;
+    if (n < 0) {
+        FILE *f = fopen("textures/anime_lineas_caras.txt", "r");
+        char line[64];
+        int cap = 0;
+        n = 0;
+        if (f != NULL) {
+            while (fgets(line, sizeof(line), f) != NULL) {
+                uint64_t v = 0;
+                int d = 0;
+                for (c = line; (*c >= '0' && *c <= '9') || ((*c | 32) >= 'a' && (*c | 32) <= 'f'); c++, d++) {
+                    v = v * 16 + (uint64_t)(*c <= '9' ? *c - '0' : (*c | 32) - 'a' + 10);
+                }
+                if (d == 0 || line[0] == '#') continue;
+                if (n == cap) {
+                    uint64_t *g = realloc(list, sizeof(uint64_t) * (size_t)(cap = cap ? cap * 2 : 256));
+                    if (g == NULL) break;
+                    list = g;
+                }
+                list[n++] = v;
+            }
+            fclose(f);
+        }
+        for (k = 1; k < n; k++) { /* (sorted, for the search) */
+            uint64_t v = list[k];
+            int j = k - 1;
+            while (j >= 0 && list[j] > v) { list[j + 1] = list[j]; j--; }
+            list[j + 1] = v;
+        }
+        fprintf(stderr, "anime: lineas: %d texturas de cara, ojos y bocas sin tope (anime_lineas_caras.txt)\n", n);
+    }
+    path = TexPack_Path(entry);
+    base = path;
+    for (c = path; c != NULL && *c; c++) if (*c == '/' || *c == '\\') base = c + 1;
+    for (c = base; c != NULL && ((*c >= '0' && *c <= '9') || ((*c | 32) >= 'a' && (*c | 32) <= 'f')); c++) {
+        h = h * 16 + (uint64_t)(*c <= '9' ? *c - '0' : (*c | 32) - 'a' + 10);
+    }
+    lo = 0;
+    hi = n - 1;
+    k = 0;
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+        if (list[mid] == h) { k = 1; break; }
+        if (list[mid] < h) lo = mid + 1; else hi = mid - 1;
+    }
+    if (ns < 512) { seen[ns].entry = entry; seen[ns].face = k; ns++; }
+    return k;
+}
+
+/* How many texels of a piece's texture one unit of its model holds, in uv (gs.frag takes the texture's size): the square
+   root of the area its triangles cover in the texture over the area they have on the model, summed over the strips of it
+   seen (each once, by strip_uv_hash). 0 = not known. */
+static float anime_density(int entry, const float *vertices, uint32_t count) {
+    static struct { int entry, ns; uint32_t seen[48]; double uv, mdl; } d[384];
+    static int nd;
+    int k, s;
+    uint32_t h, n;
+    for (k = 0; k < nd && d[k].entry != entry; k++) {
+    }
+    if (k == nd) {
+        if (nd == 384) return 0.0f;
+        memset(&d[k], 0, sizeof(d[k]));
+        d[k].entry = entry;
+        nd++;
+    }
+    if (d[k].ns < 48 && count >= 3) {
+        h = strip_uv_hash(vertices, count);
+        for (s = 0; s < d[k].ns && d[k].seen[s] != h; s++) {
+        }
+        if (s == d[k].ns) {
+            d[k].seen[d[k].ns++] = h;
+            for (n = 0; n + 2 < count; n++) {
+                const float *a = &vertices[n * 12], *b = a + 12, *c = a + 24;
+                double ux = b[8] - a[8], uy = b[9] - a[9], vx = c[8] - a[8], vy = c[9] - a[9];
+                double e1x = b[0] - a[0], e1y = b[1] - a[1], e1z = b[2] - a[2], e2x = c[0] - a[0], e2y = c[1] - a[1], e2z = c[2] - a[2];
+                double cx = e1y * e2z - e1z * e2y, cy = e1z * e2x - e1x * e2z, cz = e1x * e2y - e1y * e2x;
+                double am = sqrt(cx * cx + cy * cy + cz * cz), at = fabs(ux * vy - uy * vx);
+                if (am < 1e-9 || !(at < 1.0)) continue; /* (a seam's triangle across the whole texture: not the piece's density) */
+                d[k].uv += at;
+                d[k].mdl += am;
+            }
+        }
+    }
+    return d[k].mdl > 0.0 ? (float)sqrt(d[k].uv / d[k].mdl) : 0.0f;
+}
+
+/* The outline no wider than the lines either (outline.frag): for each fighter (its row of the alpha table, as the ids its
+   textures write: id / 15), the share of the outline's width (anime_outline.txt) the cap is at its distance now; 0 = no
+   cap known (the outline as it was). Gathered from the anime pass's strips (the nearest of them: the largest), handed to
+   the outline drawn after them (GsDraw_OutlineCaps). */
+static float sOutlineCapAcc[16], sOutlineCapShown[16];
+void GsDraw_OutlineCaps(float caps[16]) {
+    memcpy(caps, sOutlineCapShown, sizeof(sOutlineCapShown));
+}
+/* GS pixels (down the screen) one unit of the model is at the middle of this strip: vu0.vert's screen matrix (VU 14..17)
+   times bone A (0..3, pivot 8), its y row's change across the model's x, y, z at that point */
+static float anime_px_per_unit(const float *consts, const float *vertices, uint32_t count) {
+    double c[3] = {0.0, 0.0, 0.0}, M[4][4], s[4], g, gx, gy, gz;
+    uint32_t n;
+    int r, col, k;
+    if (count == 0) return 0.0f;
+    for (n = 0; n < count; n++) {
+        c[0] += vertices[n * 12];
+        c[1] += vertices[n * 12 + 1];
+        c[2] += vertices[n * 12 + 2];
+    }
+    for (k = 0; k < 3; k++) c[k] = c[k] / count - consts[32 + k];
+    for (r = 0; r < 4; r++) for (col = 0; col < 4; col++) {
+        double v = 0.0;
+        for (k = 0; k < 4; k++) v += (double)consts[56 + 4 * k + r] * consts[4 * col + k];
+        M[r][col] = v;
+    }
+    for (r = 0; r < 4; r++) s[r] = M[r][0] * c[0] + M[r][1] * c[1] + M[r][2] * c[2] + M[r][3];
+    if (!(s[3] > 1e-6)) return 0.0f;
+    g = s[1] / s[3];
+    gx = (M[1][0] - g * M[3][0]) / s[3];
+    gy = (M[1][1] - g * M[3][1]) / s[3];
+    gz = (M[1][2] - g * M[3][2]) / s[3];
+    return (float)sqrt(gx * gx + gy * gy + gz * gz);
+}
+
 /* Which way the outline shell faces on the screen, for gs.frag mode 4 (orig.z): 1 = away, 2 = this way, 0 = the anime
    pass draws over it too. BT3_ANIME_SHELL=<n>, else the number in textures/anime_shell.txt, else 1. */
 static int anime_shell(void) {
@@ -4500,23 +4716,32 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
         /* (Rev22) the lines drawn clean (gs.frag extra.z, the portrait fade's field: not used by these draws): the
            outline's width in pixels of the picture as their widest, 0 = the texture has no line block */
         {
-            /* (Rev23) textures/anime_lineas.txt: the widest a line inside a piece is drawn, in PS2 pixels (as the
-               outline's width in anime_outline.txt); without it, the outline's width */
-            static float lw = -1.0f;
-            if (lw < 0.0f) {
-                float od, ow;
-                FILE *lf = fopen("textures/anime_lineas.txt", "r");
-                GsDraw_OutlineLook(&od, &ow);
-                lw = ow;
-                if (lf != NULL) {
-                    float v;
-                    if (fscanf(lf, "%f", &v) == 1 && v > 0.05f && v <= 4.0f) lw = v;
-                    fclose(lf);
-                }
-                fprintf(stderr, "anime: lineas de dentro como mucho %.2f pixeles PS2 (anime_lineas.txt)\n", lw);
-            }
-            a.portrait[0] = sAnimeStrip.lines[form] ? lw * (float)SCALE : 0.0f;
+            /* (Rev24) the widest a line is drawn, as a width on the model (anime_lines_cap), in uv of this piece's texture
+               (its density: anime_density; gs.frag takes the texture's size): extra.z. Not known yet: 1000, no cap (the
+               lines as the file has them). And the outline's cap for this fighter at its distance now. */
+            float cap = anime_lines_cap(), dens = anime_density(sAnimeStrip.entry[form], vertices, count);
+            int face = sAnimeStrip.lines[form] ? anime_lines_face(sAnimeStrip.entry[form]) : 0;
+            a.portrait[0] = sAnimeStrip.lines[form] ? (dens > 0.0f && !face ? cap * dens : 1000.0f) : 0.0f;
             a.portrait[1] = 0.0f;
+            if (sAnimeStrip.row >= 0 && sAnimeStrip.row < 16) {
+                float od, ow, ppu = anime_px_per_unit(consts, vertices, count), share;
+                GsDraw_OutlineLook(&od, &ow);
+                share = ppu > 0.0f ? cap * ppu / ow : 0.0f;
+                if (share > sOutlineCapAcc[sAnimeStrip.row]) sOutlineCapAcc[sAnimeStrip.row] = share;
+            }
+            if (getenv("BT3_ANIME_LOG") != NULL) {
+                /* (once a texture: its density and the cap in its texels) */
+                static int seenD[256];
+                static unsigned nD;
+                unsigned m;
+                for (m = 0; m < nD && seenD[m] != sAnimeStrip.entry[form]; m++) {
+                }
+                if (m == nD && nD < 256 && dens > 0.0f) {
+                    seenD[nD++] = sAnimeStrip.entry[form];
+                    fprintf(stderr, "anime: densidad %s: %.4f uv por unidad; tope %.4f uv (lineas %d%s)\n", TexPack_Path(sAnimeStrip.entry[form]),
+                            dens, cap * dens, sAnimeStrip.lines[form], face ? ", cara: sin tope" : "");
+                }
+            }
         }
         if (a.orig[2] != 0.0f && gsVuIdxCount + (count - 2) * 3 <= MAX_VU_IDX) {
             /* A strip's triangles turn the other way every second one; listed as they come (layer 1's list), half of
@@ -4812,6 +5037,9 @@ void GsGpu_Native(int effect) {
         return;
     }
     gsNative++;
+    /* (Rev24) the fighters drawn before this outline: its cap for each (GsDraw_OutlineCaps) */
+    memcpy(sOutlineCapShown, sOutlineCapAcc, sizeof(sOutlineCapShown));
+    memset(sOutlineCapAcc, 0, sizeof(sOutlineCapAcc));
     memset(&d, 0, sizeof(d));
     d.native = effect;
     d.target = GsDraw_TargetGet((uint32_t)(gGs.frame[0] & 0x1FF), 0);

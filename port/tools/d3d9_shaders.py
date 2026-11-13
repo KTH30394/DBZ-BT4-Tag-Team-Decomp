@@ -54,6 +54,7 @@ def generate(root,gen,header,manifest):
         if name=='outline.frag':
             text=text.replace('int c = (id << 3) & 0xFF;', 'int c = int(mod(float(id) * 8.0, 256.0));')
             text=text.replace('textureSize(aux, 0).x','sz.dim[0].x')
+            text=text.replace('#version 450', '#version 450\n#define NO_CAP',1)  # (Rev24's outline cap per fighter: the outline as it was in Shader Model 3)
             text=text.replace('#version 450', '#version 450\nlayout(set = 3, binding = 1) uniform TexSizes { vec4 dim[3]; } sz;',1)
             start=text.index('    for (int k = 1;');opening=text.index('{',start);end=opening+1;depth=1
             while depth:

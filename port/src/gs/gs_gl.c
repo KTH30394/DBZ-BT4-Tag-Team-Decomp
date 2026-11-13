@@ -1118,7 +1118,7 @@ static void frame_end(void) {
             continue;
         }
         if (d->native) {
-            float params[4];
+            float params[20] = {0}; /* (Rev24: step, then the outline's cap for each fighter, outline.frag cap[]) */
             if (!gsTargets[d->target].cleared) { continue; }
             if (cur != d->target) { bind_target(d->target, 0); cur = d->target; }
             set_native(d->native);
@@ -1133,9 +1133,10 @@ static void frame_end(void) {
                 params[0] *= wide;
                 params[1] *= wide;
                 params[2] = dark / 255.0f;
+                GsDraw_OutlineCaps(&params[4]);
             }
             params[3] = getenv("BT3_FX_DEBUG") != NULL ? 1.0f : 0.0f;
-            set_params(params, 16);
+            set_params(params, sizeof(params));
             haveFu = 0;
             set_scissor(d->scissor);
             glDrawArrays(GL_TRIANGLES, 0, 3);

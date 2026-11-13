@@ -482,7 +482,7 @@ void TexPack_Init(void) {
         sBucket[h] = i + 1;
     }
     fprintf(stderr, "bt3: texture pack: %u replacement textures in %s (%u more with a name already seen)\n", sCount - dup, root, dup);
-    fprintf(stderr, "bt4 anime: build Rev23 (lineas limpias y rectas; tope en anime_lineas.txt; dibujo de Rev15; museo circulo/cuadrado)\n");
+    fprintf(stderr, "bt4 anime: build Rev24 (tope de lineas en el modelo, caras como Rev21, contorno con tope, cortes unidos; dibujo de Rev15; museo circulo/cuadrado)\n");
 }
 
 int TexPack_Count(void) {
