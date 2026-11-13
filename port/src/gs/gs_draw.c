@@ -2016,6 +2016,11 @@ static int anime_row_model(int row) {
     return row >= 0 && row < 64 ? sRowModel[row] - 1 : -1;
 }
 /* a folder whose colours this fighter (its row; -1 = not known) may have */
+/* (tenk2, 14-nov-2026) the row of the fighter being drawn: that of the last strip with anime colours (gs_draw.c
+   GsGpu_DrawVu0). For a texture of his whose palette carries no row (all its alphas 0x80: the textures of the second
+   pass over Freezer's purple 9a131c57 and Cell's metallic layer 2ea86cd1), which otherwise never got their folder's colours
+   (anime_models.txt) nor were hidden. */
+static int sFighterRowNow = -1;
 static int anime_folder_ok(int folder, int row) {
     return TexPack_AnimeFolderAllows(folder, anime_row_model(row));
 }
@@ -2889,6 +2894,9 @@ static GsTex texture_get(int ctx, int menuHd) {
     if (animeFound > 0 && px != NULL && TexPack_AnimeAnyModels()) {
         /* anime_models.txt: only the folders for this fighter's model */
         int row = anime_px_row(px, tw * th), k = 0;
+        if (row < 0) {
+            row = sFighterRowNow; /* (tenk2: a texture without a row, of the fighter being drawn) */
+        }
         for (f = 0; f < animeFound; f++) {
             if (anime_folder_ok(TexPack_AnimeFolder(animeIds[f]), row)) {
                 animeIds[k++] = animeIds[f];
@@ -2996,6 +3004,9 @@ static GsTex texture_get(int ctx, int menuHd) {
     t->texa = texa;
     t->gen = gen;
     t->mrow = TexPack_AnimeAnyModels() && bits <= 8 && px != NULL && rw == tw && rh == th ? anime_px_row(px, tw * th) : -1;
+    if (t->mrow < 0 && animeCount != 0 && TexPack_AnimeAnyModels()) {
+        t->mrow = sFighterRowNow; /* (tenk2: made for the fighter drawn then; made again if that row's model changes) */
+    }
     t->mmodel = anime_row_model(t->mrow);
     t->last = gGsFrame;
     t->replaced = replaced ? 1 : sharedText ? 3 : menuText ? 2 : 0;
@@ -4436,8 +4447,14 @@ static float anime_density(int entry, const float *vertices, uint32_t count) {
    cap known (the outline as it was). Gathered from the anime pass's strips (the nearest of them: the largest), handed to
    the outline drawn after them (GsDraw_OutlineCaps). */
 static float sOutlineCapAcc[16], sOutlineCapShown[16];
+static float anime_lines_width(void);
 void GsDraw_OutlineCaps(float caps[16]) {
     memcpy(caps, sOutlineCapShown, sizeof(sOutlineCapShown));
+    /* (tenk2, 14-nov-2026) the outline and the seams between parts drawn as the lines inside the textures (the user: "el
+       grosor del contorno y de la separacion entre una textura y otra ... el mismo que el del interior"): cap[0].x = the
+       lines' width in pixels of the picture (anime_lineas_grosor.txt x SCALE, as gs.frag's |extra.w|), outline.frag
+       draws a line that wide with the same soft edge (+-0.5 px) and black; 0 = the Rev30 outline */
+    caps[0] = anime_lines_width() * (float)SCALE;
 }
 /* GS pixels (down the screen) one unit of the model is at the middle of this strip: vu0.vert's screen matrix (VU 14..17)
    times bone A (0..3, pivot 8), its y row's change across the model's x, y, z at that point */
@@ -4592,14 +4609,23 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
     /* A strip whose layer 0 texture is in its anime folder's anime_hide.txt, or in anime_gloss.txt and drawn by
        program 1 (gs_texpack.h): none of its layers drawn. */
     if (layer == 0 || layer == 3) {
+        /* (tenk2, 14-nov-2026) the fighter whose strips these are: the row of the last strip with anime colours, for a listed
+           texture whose palette gives no row (Cell's metallic layer 2ea86cd1, Vegeta SSJ4's trousers' gloss 3833d987 and
+           Freezer's 9a131c57 were drawn: no anime colours on them and no row, so neither test below hid them) */
+        int nameRow;
+        if (layer == 0 && sLast != NULL && sLast->tex == d.tex && sLast->arow >= 0) {
+            sFighterRowNow = sLast->arow;
+        }
+        nameRow = sLast != NULL ? (sLast->glossRow >= 0 ? sLast->glossRow : sFighterRowNow) : -1;
         sHiddenStrip = sLast != NULL && sLast->tex == d.tex && !d.tex_is_target &&
                        ((sLast->animeCount != 0 &&
                          (TexPack_AnimeIsHidden(sLast->animeEntry[0]) ||
                           (layer == 0 && gVuProgram1 && TexPack_AnimeIsGloss(sLast->animeEntry[0])))) ||
                         /* (a gloss pass of a listed texture without anime colours, Vegeta SSJ4's trousers: by the
                            fighter's model, so only the folder of that fighter hides it) */
-                        (layer == 0 && gVuProgram1 && sLast->glossRow >= 0 &&
-                         TexPack_GlossFor(sLast->texName, anime_row_model(sLast->glossRow)))) ? vertices : NULL;
+                        (sLast->texName != 0 && nameRow >= 0 &&
+                         ((layer == 0 && gVuProgram1 && TexPack_GlossFor(sLast->texName, anime_row_model(nameRow))) ||
+                          TexPack_HideFor(sLast->texName, anime_row_model(nameRow))))) ? vertices : NULL;
         sHiddenCount = count;
     }
     /* (its own layers only: the vertices may sit where the next program's are, a shadow's, a debris's) */

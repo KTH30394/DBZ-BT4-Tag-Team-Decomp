@@ -65,6 +65,37 @@ void main() {
     if (!inner && hi <= here && p.step.w == 0.0) {
         discard; // (nothing larger round it, nor smaller: no edge near; most of the picture)
     }
+    if (p.cap[0].x > 0.0 && p.step.w == 0.0) {
+        // (tenk2, 14-nov-2026) as the lines inside the textures (gs.frag mode 4): a line W pixels wide (cap[0].x) on the larger
+        // side of the edge, black, coverage 1 - smoothstep(hh - 0.5, hh + 0.5, |s - hh|) with hh = W / 2 and s the distance
+        // from the edge (into the larger side; negative outside it), the edge a straight one through the 5 x 5 round it
+        float hh = 0.5 * p.cap[0].x, cov = 0.0;
+        if (inner) {
+            float other = 0.0;
+            for (int j = -2; j <= 2; j++) {
+                for (int i = -2; i <= 2; i++) {
+                    other += table(vUv + float(i) * txv + float(j) * ty) < here ? 1.0 : 0.0;
+                }
+            }
+            float s = 2.5 - 5.0 * (other / 25.0);
+            cov = max(cov, 1.0 - smoothstep(hh - 0.5, hh + 0.5, abs(s - hh)));
+        }
+        if (hi > here) {
+            float larger = 0.0;
+            for (int j = -2; j <= 2; j++) {
+                for (int i = -2; i <= 2; i++) {
+                    larger += table(vUv + float(i) * txv + float(j) * ty) > here ? 1.0 : 0.0;
+                }
+            }
+            float s = -(2.5 - 5.0 * (larger / 25.0));
+            cov = max(cov, 1.0 - smoothstep(hh - 0.5, hh + 0.5, abs(s - hh)));
+        }
+        if (cov <= 0.0) {
+            discard;
+        }
+        outColor = vec4(vec3(cov), 0.0);
+        return;
+    }
     if (edge) {
         amount = 1.0;
     } else if (inner) {

@@ -82,6 +82,7 @@ int TexPack_AnimeCapas(int id, int w[3]);
    not drawn even without anime colours on them (gs_draw.c). */
 int TexPack_GlossAny(uint64_t tex);
 int TexPack_GlossFor(uint64_t tex, int model);
+int TexPack_HideFor(uint64_t tex, int model);
 /* One of the textures listed in its folder's "anime_gloss.txt": its strips drawn by program 1 (the second pass
    over a part, lit by a reflection map: Freezer's purple) are not drawn; the same texture's program 0 strips (the
    part itself, under the gloss) are, with their anime colours. For a gloss that shares its texture with the part. */

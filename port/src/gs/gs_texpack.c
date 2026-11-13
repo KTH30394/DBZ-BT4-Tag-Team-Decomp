@@ -482,7 +482,7 @@ void TexPack_Init(void) {
         sBucket[h] = i + 1;
     }
     fprintf(stderr, "bt3: texture pack: %u replacement textures in %s (%u more with a name already seen)\n", sCount - dup, root, dup);
-    fprintf(stderr, "bt4 anime: build Rev31 (lineas finas: anime_lineas_grosor.txt 0.4; caras como su archivo (Rev21) con sus lineas en negro sin engordar; sin lineas dobles junto a pliegues; huecos de lineas rellenos; lineas grises de un texel en negro)\n");
+    fprintf(stderr, "bt4 anime: build tenk2 (tenk1 + contorno y uniones entre partes con el grosor y borde suave de las lineas de dentro; capas metalicas de Cell, Cell 2a y pantalon de Vegeta SSJ4 ocultas por nombre; texturas sin fila de luchador con sus colores anime: brillo de Freezer con sus 3 colores)\n");
 }
 
 int TexPack_Count(void) {
@@ -892,6 +892,32 @@ int TexPack_GlossAny(uint64_t tex) {
     for (f = 0; f < sFolderCount; f++) {
         for (k = 0; k < sFolders[f].glossCount; k++) {
             if (sFolders[f].gloss[k] == tex) {
+                return 1;
+            }
+        }
+        /* (tenk2) an anime_hide.txt's too: its strips hidden by name when its own anime colours are not on it */
+        for (k = 0; k < sFolders[f].hideCount; k++) {
+            if (sFolders[f].hide[k] == tex) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* (tenk2, 14-nov-2026) a texture an anime_hide.txt of this fighter's folders lists (by name, without its anime colours:
+   Cell's metallic layer 2ea86cd1 was drawn over the body in every build since Rev21) */
+int TexPack_HideFor(uint64_t tex, int model) {
+    int f, k;
+    if (model < 0) {
+        return 0;
+    }
+    for (f = 0; f < sFolderCount; f++) {
+        if (!sFolders[f].hasModels || !TexPack_AnimeFolderAllows(f, model)) {
+            continue;
+        }
+        for (k = 0; k < sFolders[f].hideCount; k++) {
+            if (sFolders[f].hide[k] == tex) {
                 return 1;
             }
         }
