@@ -27,7 +27,7 @@ void main() {
     // measured in texels of the image: a texel at distance d from the edge darkens by clamp(width - d + 1, 0, 1),
     // which gives lines of the same thickness at any shape (a fraction of a texel as a lighter last texel).
     float tx = 1.0 / float(textureSize(aux, 0).x), width = p.step.x / tx;
-    float dy = p.step.y;
+    float dy = p.step.y, fadeY = 1.0;
     float here = table(vUv);
     // Nothing to subtract (the pipeline: picture minus this, colour only), so nothing is written: the same picture,
     // without reading and writing back every pixel of the screen. A place with no object (the table's 0: stage,
@@ -37,19 +37,21 @@ void main() {
     }
 #ifndef NO_CAP
     {
-        // (Rev24) a fighter far away: its outline no wider than its lines (never under one pixel of the picture)
+        // (Rev24) a fighter far away: its outline no wider than its lines; (Rev26) under a pixel of the picture a pixel
+        // wide and as much lighter (as the face's lines are seen far away), not a whole pixel dark
         int id = int(texture(aux, vUv).r * 255.0 + 0.5) & 127, row = id / 15;
         float share = row < 16 ? p.cap[row / 4][row % 4] : 0.0;
         if (share > 0.0 && share < 1.0) {
             float ty = 1.0 / float(textureSize(aux, 0).y);
-            width = min(width, max(width * share, 1.0));
-            dy = min(dy, max(dy * share, ty));
+            width = width * share; // (under 1: the first texel's clamp(width - k + 1) is the lighter pixel)
+            dy = dy * share;
+            if (dy < ty) { fadeY = dy / ty; dy = ty; }
         }
     }
 #endif
     float down = table(vUv + vec2(0.0, dy)), up = table(vUv - vec2(0.0, dy));
     // the subtraction keeps only positive differences: the line is drawn on the side with the larger value
-    float amount = here > down || here > up ? 1.0 : 0.0;
+    float amount = here > down || here > up ? fadeY : 0.0;
     for (int k = 1; k <= 8 && float(k) < width + 1.0; k++) {
         if (here > table(vUv + vec2(float(k) * tx, 0.0)) || here > table(vUv - vec2(float(k) * tx, 0.0))) {
             amount = max(amount, clamp(width - float(k) + 1.0, 0.0, 1.0));

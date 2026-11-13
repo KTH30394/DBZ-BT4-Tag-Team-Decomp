@@ -120,55 +120,72 @@ void main() {
         float vb = clamp(v / tot, h, 1.0 / tot - h);
         vec4 t = texture(tex, vec2(uv.x, vb + block / tot));
 #ifndef NO_LINES // (d3d9_shaders.py: Shader Model 3 has no integer bits nor texelFetch; there the lines stay as the file has them)
-        if (lineBlk > 0.5 && p.extra.z < 999.0) { // (1000: no cap, a face's or not known yet: the file as it is)
+        if (lineBlk > 0.5 && p.extra.z < 999.0) { // (1000: not known yet: the file as it is)
             // (Rev24) The widest a line is drawn is a width on the model (extra.z: in uv of this texture, gs_draw.c
-            // anime_lines_cap / anime_density), the same as the lines of Goku SSJ2's face: in a close-up as much bigger as the
-            // face is. A line no wider than that is left as the file has it (the tones as they are); round a wider one the
-            // tones with the lines painted over are taken, and the lines there are drawn again: the line block's skeleton
-            // points round this pixel (3 x 3 texels; G > 0), each at its texel's middle moved by B, A (-1..1 texels, the
-            // line's real middle, straightened), joined by a segment to each neighbour R marks (a bit each: E, W, S, N, SE,
-            // NE, SW, NW), black as far as half its width there (G * 4 texels) from those segments, at most half the cap,
-            // never under half a pixel (a line far away is not lost); the edge one pixel soft at any size. A point painted
-            // over that is no skeleton point: B = half the width of its line.
+            // anime_lines_cap / anime_density), the same as the lines of Goku SSJ2's face; (Rev26) and never wider than the
+            // outline is on the screen (|extra.w|, pixels of the picture): close up the outline's width, far away the face's
+            // lines', and thinner than a pixel a line is drawn a pixel wide but as much lighter (as the face's lines fade).
+            // A line no wider than that is left as the file has it (the tones as they are); round a wider one the tones with
+            // the lines painted over are taken, and the lines there are drawn again: the line block's skeleton points round
+            // this pixel (3 x 3 texels; G > 0), each at its texel's middle moved by B, A (-1..1 texels, the line's real middle,
+            // straightened), joined by a segment to each neighbour R marks (a bit each: E, W, S, N, SE, NE, SW, NW), black as
+            // far as half its width there (G * 4 texels) from those segments, at most half the cap. A point painted over that
+            // is no skeleton point: B = half the width of its line. G = 1: a line added between two colours (Rev26), always
+            // drawn at the cap. On a face (extra.w < 0) the file's own lines are never drawn again, only the added ones.
+            // A = 1 on a texel that is no skeleton point: something within a texel; 0 there and nothing else: no line near.
             ivec2 tsz = textureSize(tex, 0);
             int bh = tsz.y / int(tot + 0.5), base = int(2.0 * blocks + 0.5) * bh;
             vec2 pt = vec2(fract(uv.x) * float(tsz.x), v * float(bh));
-            ivec2 c0 = ivec2(floor(pt));
-            float capw = 0.5 * p.extra.z * sqrt(float(tsz.x) * float(bh)), aal = 0.5 * tpx, ink = 0.0;
-            bool over = false;
-            const ivec2 nb[8] = ivec2[8](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1), ivec2(1, 1), ivec2(1, -1), ivec2(-1, 1), ivec2(-1, -1));
-            for (int dy = -1; dy <= 1; dy++) {
-                for (int dx = -1; dx <= 1; dx++) {
-                    ivec2 cc = c0 + ivec2(dx, dy), qq = cc;
-                    qq.x = (qq.x % tsz.x + tsz.x) % tsz.x;
-                    qq.y = p.orig.y > 0.5 ? clamp(qq.y, 0, bh - 1) : (qq.y % bh + bh) % bh;
-                    vec4 sk = texelFetch(tex, ivec2(qq.x, qq.y + base), 0);
-                    if (sk.g <= 0.0) {
-                        if (sk.b * 4.0 > capw + 0.02) over = true;
-                        continue;
+            ivec2 c0 = ivec2(floor(pt)), q0 = c0;
+            q0.x = (q0.x % tsz.x + tsz.x) % tsz.x;
+            q0.y = clamp(q0.y, 0, bh - 1);
+            vec4 s0 = texelFetch(tex, ivec2(q0.x, q0.y + base), 0);
+            if (s0.g > 0.0 || s0.b > 0.0 || s0.a > 0.0) {
+                bool faceT = p.extra.w < 0.0;
+                float capw = min(0.5 * p.extra.z * sqrt(float(tsz.x) * float(bh)), 0.5 * abs(p.extra.w) * tpx);
+                float aal = 0.5 * tpx, ink = 0.0, inkAdd = 0.0;
+                bool over = false;
+                const ivec2 nb[8] = ivec2[8](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1), ivec2(1, 1), ivec2(1, -1), ivec2(-1, 1), ivec2(-1, -1));
+                for (int dy = -1; dy <= 1; dy++) {
+                    for (int dx = -1; dx <= 1; dx++) {
+                        ivec2 cc = c0 + ivec2(dx, dy), qq = cc;
+                        qq.x = (qq.x % tsz.x + tsz.x) % tsz.x;
+                        qq.y = p.orig.y > 0.5 ? clamp(qq.y, 0, bh - 1) : (qq.y % bh + bh) % bh;
+                        vec4 sk = texelFetch(tex, ivec2(qq.x, qq.y + base), 0);
+                        if (sk.g <= 0.0) {
+                            if (!faceT && sk.b * 4.0 > capw + 0.02) over = true;
+                            continue;
+                        }
+                        bool added = sk.g > 0.995;
+                        float hwl = sk.g * 4.0, hh = added ? capw : min(hwl, capw), f1 = 1.0;
+                        if (hh < 0.5 * tpx) { f1 = hh / (0.5 * tpx); hh = 0.5 * tpx; }
+                        if (!added && !faceT && hwl > capw + 0.02) over = true;
+                        vec2 pa = vec2(cc) + 0.5 + (sk.ba - 0.5) * 2.0;
+                        float dist = length(pt - pa);
+                        if (dist > hh + aal + 4.3) continue; // (no segment of it reaches here)
+                        int bits = int(sk.r * 255.0 + 0.5);
+                        for (int k = 0; k < 8; k++) {
+                            if ((bits & (1 << k)) == 0) continue;
+                            ivec2 cn = cc + nb[k], qn = cn;
+                            qn.x = (qn.x % tsz.x + tsz.x) % tsz.x;
+                            qn.y = p.orig.y > 0.5 ? clamp(qn.y, 0, bh - 1) : (qn.y % bh + bh) % bh;
+                            vec4 sn = texelFetch(tex, ivec2(qn.x, qn.y + base), 0);
+                            vec2 pb = vec2(cn) + 0.5 + (sn.ba - 0.5) * 2.0, e = pb - pa;
+                            float tt = clamp(dot(pt - pa, e) / max(dot(e, e), 1e-4), 0.0, 1.0);
+                            dist = min(dist, length(pt - pa - tt * e));
+                        }
+                        float cov = (1.0 - smoothstep(hh - aal, hh + aal, dist)) * f1;
+                        ink = max(ink, cov);
+                        if (added) inkAdd = max(inkAdd, cov);
                     }
-                    float hwl = sk.g * 4.0, halfw = max(min(hwl, capw), min(hwl, 0.5 * tpx));
-                    if (hwl > capw + 0.02) over = true;
-                    vec2 pa = vec2(cc) + 0.5 + (sk.ba - 0.5) * 2.0;
-                    float dist = length(pt - pa);
-                    int bits = int(sk.r * 255.0 + 0.5);
-                    for (int k = 0; k < 8; k++) {
-                        if ((bits & (1 << k)) == 0) continue;
-                        ivec2 cn = cc + nb[k], qn = cn;
-                        qn.x = (qn.x % tsz.x + tsz.x) % tsz.x;
-                        qn.y = p.orig.y > 0.5 ? clamp(qn.y, 0, bh - 1) : (qn.y % bh + bh) % bh;
-                        vec4 sn = texelFetch(tex, ivec2(qn.x, qn.y + base), 0);
-                        vec2 pb = vec2(cn) + 0.5 + (sn.ba - 0.5) * 2.0, e = pb - pa;
-                        float tt = clamp(dot(pt - pa, e) / max(dot(e, e), 1e-4), 0.0, 1.0);
-                        dist = min(dist, length(pt - pa - tt * e));
-                    }
-                    ink = max(ink, 1.0 - smoothstep(halfw - aal, halfw + aal, dist));
                 }
-            }
-            if (over) {
-                // (the alpha stays the file's: where it leaves the shading to the game, the game's, as in Rev21; a line
-                // drawn again over such a place was seen as black dashes)
-                t.rgb = mix(texture(tex, vec2(uv.x, vb + (blocks + block) / tot)).rgb, vec3(0.0), ink);
+                if (over) {
+                    // (the alpha stays the file's: where it leaves the shading to the game, the game's, as in Rev21; a line
+                    // drawn again over such a place was seen as black dashes)
+                    t.rgb = mix(texture(tex, vec2(uv.x, vb + (blocks + block) / tot)).rgb, vec3(0.0), ink);
+                } else if (inkAdd > 0.0) {
+                    t.rgb = mix(t.rgb, vec3(0.0), inkAdd);
+                }
             }
         }
 #endif

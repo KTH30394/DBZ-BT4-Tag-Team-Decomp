@@ -1058,6 +1058,30 @@ static int anime_sk_count(const uint8_t *sk, int W, int H, int i) {
     for (k = 0; k < 8; k++) { int xx = cx + DX8[k], yy = cy + DY8[k]; if (xx >= 0 && yy >= 0 && xx < W && yy < H && sk[yy * W + xx]) c++; }
     return c;
 }
+/* (Rev26) a point beside a line is its soft grey edge (painted over) only if it is a darker shade of a colour next to it:
+   a thin stripe of another colour between two lines (the red of Goku SSJ3's boots) was painted over with the colour beside
+   it. 1 = a neighbour (no line) is lighter with the same tint (R, G, B in the same shares, within 0.06), or it is grey. */
+static int anime_halo_tint(const uint8_t *tones, const uint8_t *mask, int W, int H, int i) {
+    static const int DX8[8] = {1, -1, 0, 0, 1, 1, -1, -1}, DY8[8] = {0, 0, 1, -1, 1, -1, 1, -1};
+    const uint8_t *c = tones + i * 4;
+    int k, cx = i % W, cy = i / W, mx = c[0] > c[1] ? (c[0] > c[2] ? c[0] : c[2]) : (c[1] > c[2] ? c[1] : c[2]);
+    int mn = c[0] < c[1] ? (c[0] < c[2] ? c[0] : c[2]) : (c[1] < c[2] ? c[1] : c[2]);
+    float sc = (float)(c[0] + c[1] + c[2]) + 1.0f;
+    if (mx - mn < 25) return 1;
+    for (k = 0; k < 8; k++) {
+        int xx = cx + DX8[k], yy = cy + DY8[k], j;
+        const uint8_t *d;
+        float sd;
+        if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+        j = yy * W + xx;
+        if (mask[j] != 0) continue;
+        d = tones + j * 4;
+        sd = (float)(d[0] + d[1] + d[2]) + 1.0f;
+        if (d[3] == 0 || sd <= sc + 6.0f) continue;
+        if (fabsf(c[0] / sc - d[0] / sd) < 0.06f && fabsf(c[1] / sc - d[1] / sd) < 0.06f && fabsf(c[2] / sc - d[2] / sd) < 0.06f) return 1;
+    }
+    return 0;
+}
 static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint32_t w, uint32_t h, int n) {
     int W = (int)w, H = (int)h, N = W * H, i, x, y, k, t, changed, any = 0;
     float *Yo = malloc(sizeof(float) * N * 6), *Co = Yo + N, *Ya = Yo + 2 * N, *Ca = Yo + 3 * N, *tmp = Yo + 4 * N, *amt = Yo + 5 * N;
@@ -1065,9 +1089,11 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
     int *lab = malloc(sizeof(int) * N * 3), *src = lab + N, *q = lab + 2 * N;
     uint8_t *mask = calloc((size_t)N, 1), *out = NULL, *sk = NULL, *inp = NULL;
     float *ex = malloc(sizeof(float) * N * 5);
+    uint8_t *addf = calloc((size_t)N, 1); /* (Rev26) 1: a skeleton point of a line added between two colours */
+    float *aox = malloc(sizeof(float) * N * 2), *aoy = aox ? aox + N : NULL;
     int j0;
     static const int DX[8] = {1, -1, 0, 0, 1, 1, -1, -1}, DY[8] = {0, 0, 1, -1, 1, -1, 1, -1};
-    if (Yo == NULL || dt == NULL || lab == NULL || mask == NULL || ex == NULL) goto done;
+    if (Yo == NULL || dt == NULL || lab == NULL || mask == NULL || ex == NULL || addf == NULL || aox == NULL) goto done;
     for (i = 0; i < N; i++) { Yo[i] = lum_rgb(orig + i * 4); Ya[i] = lum_rgb(tones + i * 4); }
     anime_close(Yo, Co, tmp, W, H, 3);
     anime_close(Ya, Ca, tmp, W, H, 3);
@@ -1075,6 +1101,13 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
         int a0 = tones[i * 4 + 3] == 0;
         if (Co[i] < 8.0f || Co[i] - Yo[i] < 20.0f || Yo[i] / Co[i] > 0.88f) continue;
         if (!a0 && (Ca[i] < 8.0f || Ya[i] / Ca[i] > 0.6f)) continue; /* (only what the file shows dark: not a ring the file took out, as a flat iris's, nor the inside of an eyebrow) */
+        if (!a0) { /* (Rev26) nor a colour: an iris (3999A5) is darker than the white round it but is no line (it was drawn
+                      again as one, and it kept the line round it from being added) */
+            const uint8_t *c = tones + i * 4;
+            int mx = c[0] > c[1] ? (c[0] > c[2] ? c[0] : c[2]) : (c[1] > c[2] ? c[1] : c[2]);
+            int mn = c[0] < c[1] ? (c[0] < c[2] ? c[0] : c[2]) : (c[1] < c[2] ? c[1] : c[2]);
+            if (mx - mn > 70 && mx > 100) continue; /* (red C02020 of a boot was taken for a line and painted blue) */
+        }
         mask[i] = 1;
     }
     /* distance to the outside of the line (chamfer 1 / 1.414), both ways */
@@ -1131,6 +1164,52 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
             changed |= nd > 0;
         }
     } while (changed);
+    /* (Rev26) Every colour is parted from the next by a line (the user: the iris of Goku SSJ2 had none): where two
+       colours of the lit block meet (each at least 2 texels deep, apart by 70 or more in R + G + B) with no line within a
+       texel of either side and nothing left to the game, a line is added: a skeleton point on the side of the darker one,
+       moved half a texel towards the other (on the edge itself). G = 255 marks it (gs.frag: always drawn, at the cap's
+       width, also on a face, where the file's own lines are left as they are). Runs under 4 points are dropped. */
+    for (i = 0; i < N; i++) { aox[i] = aoy[i] = 0.0f; }
+    for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
+        int dir;
+        i = y * W + x;
+        for (dir = 0; dir < 2; dir++) {
+            int sx = dir == 0 ? 1 : 0, sy = dir == 0 ? 0 : 1, xb = x + sx, yb = y + sy, xa = x - sx, ya = y - sy, xc = xb + sx, yc = yb + sy;
+            int jb, ja, jc, dd2, m, near = 0, ax, ay;
+            const uint8_t *pi, *pb;
+            if (xa < 0 || ya < 0 || xc >= W || yc >= H) continue;
+            jb = yb * W + xb; ja = ya * W + xa; jc = yc * W + xc;
+            pi = tones + i * 4; pb = tones + jb * 4;
+            if (pi[3] == 0 || pb[3] == 0 || tones[ja * 4 + 3] == 0 || tones[jc * 4 + 3] == 0) continue;
+            dd2 = abs(pi[0] - pb[0]) + abs(pi[1] - pb[1]) + abs(pi[2] - pb[2]);
+            if (dd2 < 70) continue;
+            /* (both sides a colour, not a speck nor a soft step: the texel beyond each like it) */
+            if (abs(pi[0] - tones[ja * 4]) + abs(pi[1] - tones[ja * 4 + 1]) + abs(pi[2] - tones[ja * 4 + 2]) > 90) continue;
+            if (abs(pb[0] - tones[jc * 4]) + abs(pb[1] - tones[jc * 4 + 1]) + abs(pb[2] - tones[jc * 4 + 2]) > 90) continue;
+            for (ay = y - 1; ay <= yb + 1 && !near; ay++) for (ax = x - 1; ax <= xb + 1 && !near; ax++) {
+                if (ax < 0 || ay < 0 || ax >= W || ay >= H) continue;
+                m = ay * W + ax;
+                /* (a line touching it, or the grey soft edge of one: a line beside it came out as small double triangles;
+                   a dark patch, as an iris, is a colour: outlined) */
+                if (mask[m] == 1 || tones[m * 4 + 3] == 0 || (Ca[m] > 8.0f && Ya[m] < 0.75f * Ca[m] && mask[m] == 0 &&
+                    abs((int)tones[m * 4] - (int)tones[m * 4 + 1]) < 24 && abs((int)tones[m * 4 + 1] - (int)tones[m * 4 + 2]) < 24)) near = 1;
+            }
+            if (near) continue;
+            if (lum_rgb(pi) <= lum_rgb(pb)) { addf[i] = 1; if (dir == 0) aox[i] += 0.5f; else aoy[i] += 0.5f; }
+            else { addf[jb] = 1; if (dir == 0) aox[jb] -= 0.5f; else aoy[jb] -= 0.5f; }
+        }
+    }
+    for (i = 0; i < N; i++) lab[i] = -1;
+    for (i = 0; i < N; i++) {
+        int head = 0, tail = 0, j;
+        if (!addf[i] || lab[i] >= 0) continue;
+        lab[i] = i; q[tail++] = i;
+        while (head < tail) { int c = q[head++], cx = c % W, cy = c / W;
+            for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k], jj; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; jj = yy * W + xx;
+                if (addf[jj] && lab[jj] < 0) { lab[jj] = i; q[tail++] = jj; } } }
+        if (tail < 4) for (j = 0; j < tail; j++) addf[q[j]] = 0;
+    }
+    for (i = 0; i < N; i++) if (addf[i]) { sk[i] = 1; aox[i] = fmaxf(-0.5f, fminf(0.5f, aox[i])); aoy[i] = fmaxf(-0.5f, fminf(0.5f, aoy[i])); }
     for (i = 0; i < N; i++) if (sk[i]) any = 1;
     if (!any) goto done;
     /* each line point's nearest skeleton point (walking inside the line) */
@@ -1147,13 +1226,14 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
     for (i = 0; i < N; i++) { int cx = i % W, cy = i / W, cn = 0, ax, ay; float s = 0.0f, sxx = 0.0f, syy = 0.0f, sxy = 0.0f;
         hw[i] = 0.0f; if (!sk[i]) continue;
         for (ay = cy - 2; ay <= cy + 2; ay++) for (ax = cx - 2; ax <= cx + 2; ax++) { int jj; float ox, oy;
-            if (ax < 0 || ay < 0 || ax >= W || ay >= H) continue; jj = ay * W + ax; if (!sk[jj]) continue;
+            if (ax < 0 || ay < 0 || ax >= W || ay >= H) continue; jj = ay * W + ax; if (!sk[jj] || addf[jj]) continue;
             ox = (float)(ax - cx); oy = (float)(ay - cy); sxx += ox * ox; syy += oy * oy; sxy += ox * oy;
             if (ax >= cx - 1 && ax <= cx + 1 && ay >= cy - 1 && ay <= cy + 1) { s += tmp[jj]; cn++; } }
         hw[i] = 0.5f * s / (float)(cn > 0 ? cn : 1);
         /* (Rev24) never more than the distance from there to the line's side: at an end or where two lines meet, the points
            nearest to it are more than its width across (a 1 or 2 texel line measured 3 there: seen in a close-up) */
         hw[i] = fminf(hw[i], dt[i]);
+        if (addf[i]) hw[i] = 4.0f; /* (Rev26: an added line, G = 255) */
         (void)sxx; (void)syy; (void)sxy; }
     /* (Rev23) the line drawn straight, not in a zigzag (the folds by the trousers' fly, Broly SSJ3's hair): spurs of one or
        two points off a crossing are taken out; each skeleton point goes where the line really is (the middle of the
@@ -1211,7 +1291,7 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
                 ns2 = abs(fx - ex2) > abs(fy - ey2) ? abs(fx - ex2) : abs(fy - ey2);
                 for (st = 1; st < ns2; st++) {
                     int xx = ex2 + (int)lroundf((float)(fx - ex2) * st / ns2), yy = ey2 + (int)lroundf((float)(fy - ey2) * st / ns2), jj = yy * W + xx;
-                    if (!sk[jj]) { sk[jj] = 1; hw[jj] = hwm; }
+                    if (!sk[jj]) { sk[jj] = 1; hw[jj] = hwm; if (addf[e] || addf[f]) { addf[jj] = 1; hw[jj] = 4.0f; } }
                 }
             }
         }
@@ -1220,7 +1300,8 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
             wgt = amt[i] + 0.05f; PX[s2] += wgt * (float)(i % W - s2 % W); PY[s2] += wgt * (float)(i / W - s2 / W); WS[s2] += wgt; }
         for (i = 0; i < N; i++) { float ox = 0.0f, oy = 0.0f; if (!sk[i]) continue;
             if (WS[i] > 0.0f) { ox = PX[i] / WS[i]; oy = PY[i] / WS[i]; }
-            PX[i] = (float)(i % W) + fmaxf(-1.0f, fminf(1.0f, ox)); PY[i] = (float)(i / W) + fmaxf(-1.0f, fminf(1.0f, oy)); }
+            PX[i] = (float)(i % W) + fmaxf(-1.0f, fminf(1.0f, ox)); PY[i] = (float)(i / W) + fmaxf(-1.0f, fminf(1.0f, oy));
+            if (addf[i]) { PX[i] = (float)(i % W) + aox[i]; PY[i] = (float)(i / W) + aoy[i]; } /* (Rev26: on the edge between the colours) */ }
         for (it = 0; it < 10; it++) {
             memcpy(NX, PX, sizeof(float) * N); memcpy(NY, PY, sizeof(float) * N);
             for (i = 0; i < N; i++) { int cx = i % W, cy = i / W, c = 0; float sx = 0.0f, sy = 0.0f; if (!sk[i]) continue;
@@ -1238,10 +1319,10 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
     for (i = 0; i < N; i++) { int cx = i % W, cy = i / W;
         if (mask[i] == 1) { inp[i] = 1; continue; }
         if (mask[i] != 0 || tones[i * 4 + 3] == 0 || Ca[i] < 8.0f) continue;
-        for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k]; if (xx >= 0 && yy >= 0 && xx < W && yy < H && mask[yy * W + xx] == 1) { if (Ya[i] < 0.93f * Ca[i]) inp[i] = 1; break; } } }
+        for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k]; if (xx >= 0 && yy >= 0 && xx < W && yy < H && mask[yy * W + xx] == 1) { if (Ya[i] < 0.93f * Ca[i] && anime_halo_tint(tones, mask, W, H, i)) inp[i] = 1; break; } } }
     /* (Rev24) and one point further, where still darker than round it (a grey shadow was left beside a line drawn again) */
     for (i = 0; i < N; i++) { int cx = i % W, cy = i / W;
-        if (inp[i] || mask[i] != 0 || tones[i * 4 + 3] == 0 || Ca[i] < 8.0f || Ya[i] >= 0.9f * Ca[i]) continue;
+        if (inp[i] || mask[i] != 0 || tones[i * 4 + 3] == 0 || Ca[i] < 8.0f || Ya[i] >= 0.9f * Ca[i] || !anime_halo_tint(tones, mask, W, H, i)) continue;
         for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k]; if (xx >= 0 && yy >= 0 && xx < W && yy < H && inp[yy * W + xx] == 1) { inp[i] = 2; break; } } }
     /* (Rev24) the tone blocks twice: as the file has them (what is shown where no line is wider than the cap: the line as
        it is, as in Rev21), then with the lines painted over (where one is wider: gs.frag draws it again, thinner) */
@@ -1282,9 +1363,17 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
             L[i * 4 + 1] = sk[i] ? (uint8_t)(fmaxf(1.0f, fminf(hw[i], 4.0f) / 4.0f * 255.0f + 0.5f)) : 0;
             L[i * 4 + 2] = sk[i] ? (uint8_t)((fmaxf(-1.0f, fminf(1.0f, tmp[i])) * 0.5f + 0.5f) * 255.0f + 0.5f)
                          : inp[i] ? (uint8_t)(fmaxf(1.0f, fminf(own[i], 4.0f) / 4.0f * 255.0f + 0.5f)) : 0;
-            L[i * 4 + 3] = sk[i] ? (uint8_t)((fmaxf(-1.0f, fminf(1.0f, dc[i])) * 0.5f + 0.5f) * 255.0f + 0.5f) : 0; } }
+            L[i * 4 + 3] = sk[i] ? (uint8_t)((fmaxf(-1.0f, fminf(1.0f, dc[i])) * 0.5f + 0.5f) * 255.0f + 0.5f) : 0;
+            if (!sk[i]) { /* (Rev26) A = 255: a skeleton point or a painted-over one within a texel (gs.frag looks round only there) */
+                int ax, ay, nearL = 0;
+                for (ay = cy - 1; ay <= cy + 1 && !nearL; ay++) for (ax = cx - 1; ax <= cx + 1 && !nearL; ax++) {
+                    int xx = (ax + W) % W, yy = ay < 0 ? 0 : ay >= H ? H - 1 : ay;
+                    if (sk[yy * W + xx] || inp[yy * W + xx]) nearL = 1;
+                }
+                L[i * 4 + 3] = nearL ? 255 : 0;
+            } } }
 done:
-    free(Yo); free(dt); free(lab); free(mask); free(sk); free(inp); free(ex);
+    free(Yo); free(dt); free(lab); free(mask); free(sk); free(inp); free(ex); free(addf); free(aox);
     return out;
 }
 /* (made once a file: the same file comes again with every palette, every flash) */
@@ -3947,7 +4036,7 @@ void GsDraw_OutlineLook(float *darkness, float *width) {
 static float anime_lines_cap(void) {
     static float cap = -1.0f;
     if (cap < 0.0f) {
-        float v = 1.6f;
+        float v = 1.0f;
         FILE *f = fopen("textures/anime_lineas.txt", "r");
         if (f != NULL) {
             float r;
@@ -4721,8 +4810,15 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
                lines as the file has them). And the outline's cap for this fighter at its distance now. */
             float cap = anime_lines_cap(), dens = anime_density(sAnimeStrip.entry[form], vertices, count);
             int face = sAnimeStrip.lines[form] ? anime_lines_face(sAnimeStrip.entry[form]) : 0;
-            a.portrait[0] = sAnimeStrip.lines[form] ? (dens > 0.0f && !face ? cap * dens : 1000.0f) : 0.0f;
-            a.portrait[1] = 0.0f;
+            a.portrait[0] = sAnimeStrip.lines[form] ? (dens > 0.0f ? cap * dens : 1000.0f) : 0.0f;
+            {
+                /* (Rev26) extra.w: the outline's width in pixels of the picture, the cap close up too (the user: close up the
+                   outline is as thin as wanted, the lines inside were thicker); negative on a face (its file's lines kept,
+                   only the lines added between colours drawn) */
+                float od2, ow2;
+                GsDraw_OutlineLook(&od2, &ow2);
+                a.portrait[1] = (face ? -1.0f : 1.0f) * ow2 * (float)SCALE;
+            }
             if (sAnimeStrip.row >= 0 && sAnimeStrip.row < 16) {
                 float od, ow, ppu = anime_px_per_unit(consts, vertices, count), share;
                 GsDraw_OutlineLook(&od, &ow);
@@ -5040,6 +5136,16 @@ void GsGpu_Native(int effect) {
     /* (Rev24) the fighters drawn before this outline: its cap for each (GsDraw_OutlineCaps) */
     memcpy(sOutlineCapShown, sOutlineCapAcc, sizeof(sOutlineCapShown));
     memset(sOutlineCapAcc, 0, sizeof(sOutlineCapAcc));
+    if (getenv("BT3_ANIME_LOG") != NULL) {
+        static unsigned capFrame;
+        if (gGsFrame >= capFrame + 600) {
+            int r;
+            capFrame = gGsFrame;
+            fprintf(stderr, "anime: contorno tope (parte de su ancho) por fila:");
+            for (r = 0; r < 16; r++) if (sOutlineCapShown[r] > 0.0f) fprintf(stderr, " fila %d %.2f", r, sOutlineCapShown[r]);
+            fprintf(stderr, "\n");
+        }
+    }
     memset(&d, 0, sizeof(d));
     d.native = effect;
     d.target = GsDraw_TargetGet((uint32_t)(gGs.frame[0] & 0x1FF), 0);
