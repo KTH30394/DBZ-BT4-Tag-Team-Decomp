@@ -482,7 +482,7 @@ void TexPack_Init(void) {
         sBucket[h] = i + 1;
     }
     fprintf(stderr, "bt3: texture pack: %u replacement textures in %s (%u more with a name already seen)\n", sCount - dup, root, dup);
-    fprintf(stderr, "bt4 anime: build Rev27 (lineas de color oscuro (pliegues azules) tambien finas; lineas: tope = el menor entre contorno en pantalla y lineas de la cara; mas finas que 1 px se aclaran; lineas nuevas entre colores (iris); franjas de color no se tapan; caras como Rev21; dibujo de Rev15)\n");
+    fprintf(stderr, "bt4 anime: build Rev28 (= Rev27, otra huella para Smart App Control; lineas de color oscuro (pliegues azules) tambien finas; lineas: tope = el menor entre contorno en pantalla y lineas de la cara; mas finas que 1 px se aclaran; lineas nuevas entre colores (iris); franjas de color no se tapan; caras como Rev21; dibujo de Rev15)\n");
 }
 
 int TexPack_Count(void) {
