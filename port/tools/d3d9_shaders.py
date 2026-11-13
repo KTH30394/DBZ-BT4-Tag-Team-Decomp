@@ -48,6 +48,7 @@ def generate(root,gen,header,manifest):
             text=text.replace('textureSize(tex, 0)', 'ivec2(sz.dim[0].xy)')
             text=text.replace('float(int(ab * 255.0 + 0.5) | 128)', 'max(floor(ab * 255.0 + 0.5), 128.0 + mod(floor(ab * 255.0 + 0.5), 128.0))')
             text=text.replace('texelFetch(dateTex, ivec2(gl_FragCoord.xy), 0)', 'textureLod(dateTex, (floor(gl_FragCoord.xy) + vec2(0.5)) / sz.dim[1].xy, 0.0)')
+            text=text.replace('#version 450', '#version 450\n#define NO_LINES',1)  # (the clean lines of Rev22: integer bits and texelFetch are not in Shader Model 3)
             text=text.replace('#version 450', '#version 450\nlayout(set = 3, binding = 1) uniform TexSizes { vec4 dim[3]; } sz;',1)
         if name=='dclut.frag':text=text.replace('texelFetch(clutTex, ivec2(idx, 0), 0)', 'textureLod(clutTex, vec2((float(idx) + 0.5) / 256.0, 0.5), 0.0)')
         if name=='outline.frag':

@@ -1055,7 +1055,8 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
     float *Yo = malloc(sizeof(float) * N * 6), *Co = Yo + N, *Ya = Yo + 2 * N, *Ca = Yo + 3 * N, *tmp = Yo + 4 * N, *amt = Yo + 5 * N;
     float *dt = malloc(sizeof(float) * N * 3), *dc = dt + N, *hw = dt + 2 * N;
     int *lab = malloc(sizeof(int) * N * 3), *src = lab + N, *q = lab + 2 * N;
-    uint8_t *mask = calloc((size_t)N, 1), *out = NULL;
+    uint8_t *mask = calloc((size_t)N, 1), *out = NULL, *sk = NULL, *inp = NULL;
+    int j0;
     static const int DX[8] = {1, -1, 0, 0, 1, 1, -1, -1}, DY[8] = {0, 0, 1, -1, 1, -1, 1, -1};
     if (Yo == NULL || dt == NULL || lab == NULL || mask == NULL) goto done;
     for (i = 0; i < N; i++) { Yo[i] = lum_rgb(orig + i * 4); Ya[i] = lum_rgb(tones + i * 4); }
@@ -1064,7 +1065,7 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
     for (i = 0; i < N; i++) {
         int a0 = tones[i * 4 + 3] == 0;
         if (Co[i] < 8.0f || Co[i] - Yo[i] < 20.0f || Yo[i] / Co[i] > 0.88f) continue;
-        if (!a0 && (Ca[i] < 8.0f || Ya[i] / Ca[i] > 0.94f)) continue; /* (a line the file took out, as a flat iris's ring) */
+        if (!a0 && (Ca[i] < 8.0f || Ya[i] / Ca[i] > 0.6f)) continue; /* (only what the file shows dark: not a ring the file took out, as a flat iris's, nor the inside of an eyebrow) */
         mask[i] = 1;
     }
     /* distance to the outside of the line (chamfer 1 / 1.414), both ways */
@@ -1097,25 +1098,64 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
         else if (Co[i] > 8.0f) d = (1.0f - Yo[i] / Co[i]) / 0.5f;
         amt[i] = d < 0.0f ? 0.0f : d > 1.0f ? 1.0f : d;
     }
-    /* the skeleton (ridge of dt), then each point's nearest skeleton point and its distance to it */
-    for (i = 0; i < N; i++) { dc[i] = 1e6f; src[i] = -1; }
-    for (i = 0; i < N; i++) { int cx = i % W, cy = i / W, top = 1;
-        if (mask[i] != 1) continue;
-        for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k], jj; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; jj = yy * W + xx; if (mask[jj] == 1 && dt[jj] > dt[i] + 0.01f) top = 0; }
-        if (top) { dc[i] = 0.0f; src[i] = i; any = 1; } }
+    /* the skeleton: the line points thinned to one point across (Zhang-Suen) */
+    sk = calloc((size_t)N, 1);
+    if (sk == NULL) goto done;
+    for (i = 0; i < N; i++) sk[i] = mask[i] == 1;
+    do {
+        int pass;
+        changed = 0;
+        for (pass = 0; pass < 2; pass++) {
+            int nd = 0;
+            for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
+                int P[9], B = 0, A = 0, j;
+                static const int OX[8] = {0, 1, 1, 1, 0, -1, -1, -1}, OY[8] = {-1, -1, 0, 1, 1, 1, 0, -1}; /* P2..P9 */
+                i = y * W + x;
+                if (!sk[i]) continue;
+                for (j = 0; j < 8; j++) { int xx = x + OX[j], yy = y + OY[j]; P[j] = (xx >= 0 && yy >= 0 && xx < W && yy < H) ? sk[yy * W + xx] : 0; B += P[j]; }
+                P[8] = P[0];
+                for (j = 0; j < 8; j++) A += (P[j] == 0 && P[j + 1] == 1);
+                if (B < 2 || B > 6 || A != 1) continue;
+                if (pass == 0 ? (P[0] * P[2] * P[4] == 0 && P[2] * P[4] * P[6] == 0) : (P[0] * P[2] * P[6] == 0 && P[0] * P[4] * P[6] == 0)) q[nd++] = i;
+            }
+            for (j0 = 0; j0 < nd; j0++) sk[q[j0]] = 0;
+            changed |= nd > 0;
+        }
+    } while (changed);
+    for (i = 0; i < N; i++) if (sk[i]) any = 1;
     if (!any) goto done;
+    /* each line point's nearest skeleton point (walking inside the line) */
+    for (i = 0; i < N; i++) { dc[i] = sk[i] ? 0.0f : 1e6f; src[i] = sk[i] ? i : -1; }
     do { changed = 0;
         for (i = 0; i < N; i++) { int cx = i % W, cy = i / W; if (mask[i] != 1) continue;
-            for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k], jj; float d; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; jj = yy * W + xx;
-                if (mask[jj] != 1 || src[jj] < 0) continue; d = dc[jj] + (k < 4 ? 1.0f : 1.414f); if (d < dc[i] - 0.001f) { dc[i] = d; src[i] = src[jj]; changed = 1; } } }
+            for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k], jj; float dd; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; jj = yy * W + xx;
+                if (mask[jj] != 1 || src[jj] < 0) continue; dd = dc[jj] + (k < 4 ? 1.0f : 1.414f); if (dd < dc[i] - 0.001f) { dc[i] = dd; src[i] = src[jj]; changed = 1; } } }
     } while (changed);
-    /* the width at each skeleton point: the darkness of the points that are nearest to it (the line's weight), smoothed */
+    /* the width at each skeleton point: the darkness of the line points nearest to it (the line's weight across),
+       smoothed along it; and which way the line runs there (the skeleton points round it, 5 x 5) */
     for (i = 0; i < N; i++) tmp[i] = 0.0f;
     for (i = 0; i < N; i++) if (mask[i] == 1 && src[i] >= 0) tmp[src[i]] += amt[i];
-    for (i = 0; i < N; i++) { int cx = i % W, cy = i / W, cn = 1; float s;
-        hw[i] = 0.0f; if (mask[i] != 1 || src[i] != i) continue; s = tmp[i];
-        for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k], jj; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; jj = yy * W + xx; if (mask[jj] == 1 && src[jj] == jj) { s += tmp[jj]; cn++; } }
-        hw[i] = 0.5f * s / (float)cn; }
+    for (i = 0; i < N; i++) { int cx = i % W, cy = i / W, cn = 0, ax, ay; float s = 0.0f, sxx = 0.0f, syy = 0.0f, sxy = 0.0f;
+        hw[i] = 0.0f; if (!sk[i]) continue;
+        for (ay = cy - 2; ay <= cy + 2; ay++) for (ax = cx - 2; ax <= cx + 2; ax++) { int jj; float ox, oy;
+            if (ax < 0 || ay < 0 || ax >= W || ay >= H) continue; jj = ay * W + ax; if (!sk[jj]) continue;
+            ox = (float)(ax - cx); oy = (float)(ay - cy); sxx += ox * ox; syy += oy * oy; sxy += ox * oy;
+            if (ax >= cx - 1 && ax <= cx + 1 && ay >= cy - 1 && ay <= cy + 1) { s += tmp[jj]; cn++; } }
+        hw[i] = 0.5f * s / (float)(cn > 0 ? cn : 1);
+        (void)sxx; (void)syy; (void)sxy; }
+    /* each skeleton point a little towards the middle of its neighbours (a stair of points drawn as a smooth line) */
+    for (i = 0; i < N; i++) { int cx = i % W, cy = i / W, cn = 0, ax, ay; float mx2 = 0.0f, my2 = 0.0f;
+        tmp[i] = 0.0f; dc[i] = 0.0f; if (!sk[i]) continue;
+        for (ay = cy - 1; ay <= cy + 1; ay++) for (ax = cx - 1; ax <= cx + 1; ax++) { if (ax < 0 || ay < 0 || ax >= W || ay >= H || !sk[ay * W + ax]) continue; mx2 += (float)(ax - cx); my2 += (float)(ay - cy); cn++; }
+        tmp[i] = 0.5f * mx2 / (float)cn; dc[i] = 0.5f * my2 / (float)cn; }
+    /* what is painted over with the colour round the line: the line, and the soft edge the old one had beside it (a
+       point next to it a little darker than round it), so nothing grey of the old line is left */
+    inp = calloc((size_t)N, 1);
+    if (inp == NULL) goto done;
+    for (i = 0; i < N; i++) { int cx = i % W, cy = i / W;
+        if (mask[i] == 1) { inp[i] = 1; continue; }
+        if (mask[i] != 0 || tones[i * 4 + 3] == 0 || Ca[i] < 8.0f) continue;
+        for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k]; if (xx >= 0 && yy >= 0 && xx < W && yy < H && mask[yy * W + xx] == 1) { if (Ya[i] < 0.93f * Ca[i]) inp[i] = 1; break; } } }
     out = malloc((size_t)N * 4 * (n + 1));
     if (out == NULL) goto done;
     memcpy(out, tones, (size_t)N * 4 * n);
@@ -1123,21 +1163,26 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
     for (t = 0; t < n; t++) {
         uint8_t *b = out + (size_t)t * N * 4;
         int head = 0, tail = 0;
-        for (i = 0; i < N; i++) { lab[i] = (mask[i] == 1) ? -1 : (b[i * 4 + 3] != 0 ? 1 : 0); if (lab[i] == 1) { int cx = i % W, cy = i / W, edge = 0;
-            for (k = 0; k < 4; k++) { int xx = cx + DX[k], yy = cy + DY[k]; if (xx >= 0 && yy >= 0 && xx < W && yy < H && mask[yy * W + xx] == 1) edge = 1; } if (edge) q[tail++] = i; } }
+        for (i = 0; i < N; i++) { lab[i] = inp[i] ? -1 : (b[i * 4 + 3] != 0 ? 1 : 0); if (lab[i] == 1) { int cx = i % W, cy = i / W, edge = 0;
+            for (k = 0; k < 4; k++) { int xx = cx + DX[k], yy = cy + DY[k]; if (xx >= 0 && yy >= 0 && xx < W && yy < H && inp[yy * W + xx]) edge = 1; } if (edge) q[tail++] = i; } }
         while (head < tail) { int c = q[head++], cx = c % W, cy = c / W;
             for (k = 0; k < 4; k++) { int xx = cx + DX[k], yy = cy + DY[k], jj; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; jj = yy * W + xx;
                 if (lab[jj] == -1) { memcpy(b + jj * 4, b + c * 4, 3); b[jj * 4 + 3] = 255; lab[jj] = 1; q[tail++] = jj; } } }
         for (i = 0; i < N; i++) if (lab[i] == -1) { b[i * 4] = b[i * 4 + 1] = b[i * 4 + 2] = 0; b[i * 4 + 3] = 255; } /* (nothing round it: black) */
     }
     { uint8_t *L = out + (size_t)n * N * 4;
+        /* each skeleton point: R = which of its 8 neighbours are skeleton too (a bit each: E, W, S, N, SE, NE, SW, NW as
+           DX / DY), G = half the width / 4 texels (0 = no skeleton point), B, A = where in its texel the point is (x, y,
+           -0.5..0.5). gs.frag draws the segments from each point to its neighbours: the line whole, smooth, at any size */
         for (i = 0; i < N; i++) {
-            float d = mask[i] == 1 ? dc[i] : 8.0f, r = (mask[i] == 1 && src[i] >= 0) ? hw[src[i]] : 0.0f;
-            L[i * 4] = (uint8_t)(fminf(d, 8.0f) / 8.0f * 255.0f + 0.5f);
-            L[i * 4 + 1] = (uint8_t)(fminf(r, 8.0f) / 8.0f * 255.0f + 0.5f);
-            L[i * 4 + 2] = 0; L[i * 4 + 3] = 255; } }
+            int cx = i % W, cy = i / W, bits = 0;
+            if (sk[i]) for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k]; if (xx >= 0 && yy >= 0 && xx < W && yy < H && sk[yy * W + xx]) bits |= 1 << k; }
+            L[i * 4] = (uint8_t)bits;
+            L[i * 4 + 1] = sk[i] ? (uint8_t)(fmaxf(1.0f, fminf(hw[i], 4.0f) / 4.0f * 255.0f + 0.5f)) : 0;
+            L[i * 4 + 2] = sk[i] ? (uint8_t)((fmaxf(-0.5f, fminf(0.5f, tmp[i])) + 0.5f) * 255.0f + 0.5f) : 128;
+            L[i * 4 + 3] = sk[i] ? (uint8_t)((fmaxf(-0.5f, fminf(0.5f, dc[i])) + 0.5f) * 255.0f + 0.5f) : 128; } }
 done:
-    free(Yo); free(dt); free(lab); free(mask);
+    free(Yo); free(dt); free(lab); free(mask); free(sk); free(inp);
     return out;
 }
 /* (made once a file: the same file comes again with every palette, every flash) */

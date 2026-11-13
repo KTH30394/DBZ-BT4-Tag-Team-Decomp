@@ -108,7 +108,7 @@ void main() {
         float h = 0.5 / float(textureSize(tex, 0).y);
         float v = p.orig.y > 0.5 ? clamp(uv.y, 0.0, 1.0) : fract(uv.y);
         // (Rev22, 13-nov-2026) extra.z > 0: one more block after the tones holds the lines inside the piece (gs_draw.c
-        // anime_lines_make: R = distance to the line's middle / 8 texels, G = half its width / 8 texels), and the tone
+        // anime_lines_make: R, G = the way from the line's middle, B = half its width), and the tone
         // blocks have the colour round each line where it was. The line is drawn here black, as wide as it was but never
         // wider than the outline (extra.z: its width in pixels of the picture), sharp however much the texture is
         // stretched (the edge one pixel soft, from how many texels a pixel covers).
@@ -117,14 +117,48 @@ void main() {
         float tpx = max(length(dFdx(tcl)), length(dFdy(tcl))); // texels of the piece per pixel of the picture
         float vb = clamp(v / tot, h, 1.0 / tot - h);
         vec4 t = texture(tex, vec2(uv.x, vb + block / tot));
-        vec4 lineT = lineBlk > 0.5 ? texture(tex, vec2(uv.x, vb + blocks / tot)) : vec4(1.0, 0.0, 0.0, 1.0);
+        vec4 lineT = lineBlk > 0.5 ? texture(tex, vec2(uv.x, vb + blocks / tot)) : vec4(1.0, 1.0, 0.0, 1.0);
         if (t.a < 0.5) discard; // (the game's own shading kept there)
+#ifndef NO_LINES // (d3d9_shaders.py: Shader Model 3 has no integer bits nor texelFetch; there the lines stay as the file has them)
         if (lineBlk > 0.5) {
-            float dl = lineT.r * 8.0, hwl = lineT.g * 8.0;
-            float halfw = min(hwl, 0.5 * p.extra.z * tpx), aal = 0.5 * tpx;
-            float ink = hwl > 0.02 ? 1.0 - smoothstep(halfw - aal, halfw + aal, dl) : 0.0;
+            // The line block's skeleton points round this pixel (3 x 3 texels; G > 0): each at its texel's middle moved by
+            // B, A (-0.5..0.5), joined by a segment to each neighbour R marks (a bit each: E, W, S, N, SE, NE, SW, NW). The
+            // line is drawn black as far as half its width there (G * 4 texels) from those segments: at most half the
+            // outline, never under half a pixel (a line far away is not lost); the edge one pixel soft at any size.
+            ivec2 tsz = textureSize(tex, 0);
+            int bh = tsz.y / int(tot + 0.5), base = int(blocks + 0.5) * bh;
+            vec2 pt = vec2(fract(uv.x) * float(tsz.x), v * float(bh));
+            ivec2 c0 = ivec2(floor(pt));
+            float capw = 0.5 * p.extra.z * tpx, aal = 0.5 * tpx, ink = 0.0;
+            const ivec2 nb[8] = ivec2[8](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1), ivec2(1, 1), ivec2(1, -1), ivec2(-1, 1), ivec2(-1, -1));
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    ivec2 cc = c0 + ivec2(dx, dy), qq = cc;
+                    qq.x = (qq.x % tsz.x + tsz.x) % tsz.x;
+                    qq.y = p.orig.y > 0.5 ? clamp(qq.y, 0, bh - 1) : (qq.y % bh + bh) % bh;
+                    vec4 sk = texelFetch(tex, ivec2(qq.x, qq.y + base), 0);
+                    if (sk.g <= 0.0) continue;
+                    float hwl = sk.g * 4.0, halfw = max(min(hwl, capw), min(hwl, 0.5 * tpx));
+                    vec2 pa = vec2(cc) + 0.5 + (sk.ba - 0.5);
+                    float dist = length(pt - pa);
+                    int bits = int(sk.r * 255.0 + 0.5);
+                    for (int k = 0; k < 8; k++) {
+                        if ((bits & (1 << k)) == 0) continue;
+                        ivec2 cn = cc + nb[k], qn = cn;
+                        qn.x = (qn.x % tsz.x + tsz.x) % tsz.x;
+                        qn.y = p.orig.y > 0.5 ? clamp(qn.y, 0, bh - 1) : (qn.y % bh + bh) % bh;
+                        vec4 sn = texelFetch(tex, ivec2(qn.x, qn.y + base), 0);
+                        vec2 pb = vec2(cn) + 0.5 + (sn.ba - 0.5), e = pb - pa;
+                        float tt = clamp(dot(pt - pa, e) / max(dot(e, e), 1e-4), 0.0, 1.0);
+                        dist = min(dist, length(pt - pa - tt * e));
+                    }
+                    ink = max(ink, 1.0 - smoothstep(halfw - aal, halfw + aal, dist));
+                }
+            }
             t.rgb = mix(t.rgb, vec3(0.0), ink);
         }
+
+#endif
         // The game outlines a model by drawing it a second time inside out, behind it: those triangles face the other
         // way on the screen, and they are the line round every lock of hair (the outline pass only draws lines between
         // parts, and a head of hair is one part). Left as the game drew them, on every model (orig.z: 1 = the shell is
