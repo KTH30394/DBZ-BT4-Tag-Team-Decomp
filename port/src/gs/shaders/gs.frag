@@ -142,9 +142,15 @@ void main() {
             vec4 s0 = texelFetch(tex, ivec2(q0.x, q0.y + base), 0);
             if (s0.g > 0.0 || s0.b > 0.0 || s0.a > 0.0) {
                 bool faceT = p.extra.w < 0.0;
-                float capw = min(0.5 * p.extra.z * sqrt(float(tsz.x) * float(bh)), 0.5 * abs(p.extra.w) * tpx);
-                float aal = 0.5 * tpx, ink = 0.0, inkAdd = 0.0;
+                float capWorld = 0.5 * p.extra.z * sqrt(float(tsz.x) * float(bh)), capScr = 0.5 * abs(p.extra.w) * tpx;
+                float capw = min(capWorld, capScr);
+                // (Rev29) the edge soft over a pixel and a half, as the cleanest line the user found (no saw teeth aslant); a
+                // line marked thicker (G 192..254, anime_lineas_gruesas.txt) may be up to orig.w times the screen cap, never
+                // more than the face's lines on the model: as thin as the rest far away, thicker only once close enough to tell
+                float aal = 0.75 * tpx, ink = 0.0, inkAdd = 0.0;
+                float kThick = p.rect.z > 0.5 ? 2.0 : max(p.orig.w, 1.0), capThick = min(capWorld, kThick * capScr);
                 bool over = false;
+                float bestD = 1e6; vec2 bestCp = pt; // (Rev29) the nearest point of any line drawn again here
                 const ivec2 nb[8] = ivec2[8](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1), ivec2(1, 1), ivec2(1, -1), ivec2(-1, 1), ivec2(-1, -1));
                 for (int dy = -1; dy <= 1; dy++) {
                     for (int dx = -1; dx <= 1; dx++) {
@@ -156,13 +162,15 @@ void main() {
                             if (!faceT && sk.b * 4.0 > capw + 0.02) over = true;
                             continue;
                         }
-                        bool added = sk.g > 0.995;
-                        float hwl = sk.g * 4.0, hh = added ? capw : min(hwl, capw), f1 = 1.0;
+                        float g255 = sk.g * 255.0;
+                        bool added = g255 > 254.5, thick = !added && g255 > 191.5;
+                        float hwl = thick ? (g255 - 192.0) / 62.0 * 3.0 : sk.g * 4.0;
+                        float hh = added ? capw : thick ? min(hwl, capThick) : min(hwl, capw), f1 = 1.0;
                         if (hh < 0.5 * tpx) { f1 = hh / (0.5 * tpx); hh = 0.5 * tpx; }
                         if (!added && !faceT && hwl > capw + 0.02) over = true;
                         vec2 pa = vec2(cc) + 0.5 + (sk.ba - 0.5) * 2.0;
                         float dist = length(pt - pa);
-                        if (dist > hh + aal + 4.3) continue; // (no segment of it reaches here)
+                        vec2 cp = pa;
                         int bits = int(sk.r * 255.0 + 0.5);
                         for (int k = 0; k < 8; k++) {
                             if ((bits & (1 << k)) == 0) continue;
@@ -172,17 +180,29 @@ void main() {
                             vec4 sn = texelFetch(tex, ivec2(qn.x, qn.y + base), 0);
                             vec2 pb = vec2(cn) + 0.5 + (sn.ba - 0.5) * 2.0, e = pb - pa;
                             float tt = clamp(dot(pt - pa, e) / max(dot(e, e), 1e-4), 0.0, 1.0);
-                            dist = min(dist, length(pt - pa - tt * e));
+                            float dd = length(pt - pa - tt * e);
+                            if (dd < dist) { dist = dd; cp = pa + tt * e; }
                         }
                         float cov = (1.0 - smoothstep(hh - aal, hh + aal, dist)) * f1;
                         ink = max(ink, cov);
                         if (added) inkAdd = max(inkAdd, cov);
+                        if (!added && dist < bestD) { bestD = dist; bestCp = cp; }
                     }
                 }
                 if (over) {
                     // (the alpha stays the file's: where it leaves the shading to the game, the game's, as in Rev21; a line
                     // drawn again over such a place was seen as black dashes)
-                    t.rgb = mix(texture(tex, vec2(uv.x, vb + (blocks + block) / tot)).rgb, vec3(0.0), ink);
+                    vec3 base3 = texture(tex, vec2(uv.x, vb + (blocks + block) / tot)).rgb;
+                    if (bestD < 1.0 && bestD > 1e-3) {
+                        // (Rev29) within a texel of the line: the colour of this side a texel off the line, along the line's
+                        // own smooth course, so where two colours meet at a line drawn thinner their edge runs with it (the
+                        // texture's stair of texels was left showing beside the thin line: saw teeth)
+                        vec2 sp = bestCp + (pt - bestCp) / bestD * 1.0;
+                        float su = sp.x / float(tsz.x), sv = sp.y / float(bh);
+                        sv = p.orig.y > 0.5 ? clamp(sv, 0.0, 1.0) : fract(sv);
+                        base3 = texture(tex, vec2(su, clamp(sv / tot, h, 1.0 / tot - h) + (blocks + block) / tot)).rgb;
+                    }
+                    t.rgb = mix(base3, vec3(0.0), ink);
                 } else if (inkAdd > 0.0) {
                     t.rgb = mix(t.rgb, vec3(0.0), inkAdd);
                 }

@@ -27,7 +27,6 @@ void main() {
     // measured in texels of the image: a texel at distance d from the edge darkens by clamp(width - d + 1, 0, 1),
     // which gives lines of the same thickness at any shape (a fraction of a texel as a lighter last texel).
     float tx = 1.0 / float(textureSize(aux, 0).x), width = p.step.x / tx;
-    float dy = p.step.y, fadeY = 1.0;
     float here = table(vUv);
     // Nothing to subtract (the pipeline: picture minus this, colour only), so nothing is written: the same picture,
     // without reading and writing back every pixel of the screen. A place with no object (the table's 0: stage,
@@ -35,29 +34,46 @@ void main() {
     if (here == 0.0 && p.step.w == 0.0) {
         discard;
     }
-#ifndef NO_CAP
-    {
-        // (Rev24) a fighter far away: its outline no wider than its lines; (Rev26) under a pixel of the picture a pixel
-        // wide and as much lighter (as the face's lines are seen far away), not a whole pixel dark
-        int id = int(texture(aux, vUv).r * 255.0 + 0.5) & 127, row = id / 15;
-        float share = row < 16 ? p.cap[row / 4][row % 4] : 0.0;
-        if (share > 0.0 && share < 1.0) {
-            float ty = 1.0 / float(textureSize(aux, 0).y);
-            width = width * share; // (under 1: the first texel's clamp(width - k + 1) is the lighter pixel)
-            dy = dy * share;
-            if (dy < ty) { fadeY = dy / ty; dy = ty; }
-        }
-    }
-#endif
+    float amount = 0.0;
+#ifdef NO_CAP
+    float dy = p.step.y;
     float down = table(vUv + vec2(0.0, dy)), up = table(vUv - vec2(0.0, dy));
     // the subtraction keeps only positive differences: the line is drawn on the side with the larger value
-    float amount = here > down || here > up ? fadeY : 0.0;
+    amount = here > down || here > up ? 1.0 : 0.0;
     for (int k = 1; k <= 8 && float(k) < width + 1.0; k++) {
         if (here > table(vUv + vec2(float(k) * tx, 0.0)) || here > table(vUv - vec2(float(k) * tx, 0.0))) {
             amount = max(amount, clamp(width - float(k) + 1.0, 0.0, 1.0));
             break; // (the nearest edge gives the most)
         }
     }
+#else
+    {
+        // (Rev24) a fighter far away: its outline no wider than its lines; (Rev26) under a pixel of the picture lighter
+        int id = int(texture(aux, vUv).r * 255.0 + 0.5) & 127, row = id / 15;
+        float share = row < 16 ? p.cap[row / 4][row % 4] : 0.0;
+        if (share > 0.0 && share < 1.0) width = width * share;
+    }
+    // (Rev29, 13-nov-2026) Smooth, as a line the anime pass draws (the user: no saw teeth where the outline runs aslant).
+    // The edge is where the object number changes, a staircase of whole pixels. Of the 5 x 5 pixels round this one, the
+    // share F on the other side (a smaller value: where the line is not drawn) is, by a straight edge, (2.5 - d) / 5,
+    // d the distance from the edge to this pixel's middle: the stairs averaged into a straight edge. The line covers 0..width
+    // from the edge inwards; the pixel, d - 0.5 .. d + 0.5: it is drawn as much as they overlap (soft both sides, any width).
+    vec2 ty = vec2(0.0, 1.0 / float(textureSize(aux, 0).y)), txv = vec2(tx, 0.0);
+    bool near = table(vUv + txv) < here || table(vUv - txv) < here || table(vUv + ty) < here || table(vUv - ty) < here ||
+                table(vUv + 2.0 * txv) < here || table(vUv - 2.0 * txv) < here || table(vUv + 2.0 * ty) < here ||
+                table(vUv - 2.0 * ty) < here || table(vUv + txv + ty) < here || table(vUv - txv + ty) < here ||
+                table(vUv + txv - ty) < here || table(vUv - txv - ty) < here;
+    if (near) {
+        float other = 0.0;
+        for (int j = -2; j <= 2; j++) {
+            for (int i = -2; i <= 2; i++) {
+                other += table(vUv + float(i) * txv + float(j) * ty) < here ? 1.0 : 0.0;
+            }
+        }
+        float d = 2.5 - 5.0 * (other / 25.0);
+        amount = clamp(min(d + 0.5, width) - max(d - 0.5, 0.0), 0.0, 1.0);
+    }
+#endif
     if (amount == 0.0 && p.step.w == 0.0) {
         discard;
     }
