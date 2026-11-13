@@ -1050,15 +1050,23 @@ static void anime_close(const float *Y, float *out, float *tmp, int w, int h, in
     for (y = 0; y < h; y++) for (x = 0; x < w; x++) { float m = 1e9f; for (k = -r; k <= r; k++) { int xx = x + k; if (xx >= 0 && xx < w && out[y * w + xx] < m) m = out[y * w + xx]; } tmp[y * w + x] = m; }
     for (y = 0; y < h; y++) for (x = 0; x < w; x++) { float m = 1e9f; for (k = -r; k <= r; k++) { int yy = y + k; if (yy >= 0 && yy < h && tmp[yy * w + x] < m) m = tmp[yy * w + x]; } out[y * w + x] = m; }
 }
+/* how many of the 8 neighbours of skeleton point i are skeleton too */
+static int anime_sk_count(const uint8_t *sk, int W, int H, int i) {
+    static const int DX8[8] = {1, -1, 0, 0, 1, 1, -1, -1}, DY8[8] = {0, 0, 1, -1, 1, -1, 1, -1};
+    int k, c = 0, cx = i % W, cy = i / W;
+    for (k = 0; k < 8; k++) { int xx = cx + DX8[k], yy = cy + DY8[k]; if (xx >= 0 && yy >= 0 && xx < W && yy < H && sk[yy * W + xx]) c++; }
+    return c;
+}
 static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint32_t w, uint32_t h, int n) {
     int W = (int)w, H = (int)h, N = W * H, i, x, y, k, t, changed, any = 0;
     float *Yo = malloc(sizeof(float) * N * 6), *Co = Yo + N, *Ya = Yo + 2 * N, *Ca = Yo + 3 * N, *tmp = Yo + 4 * N, *amt = Yo + 5 * N;
     float *dt = malloc(sizeof(float) * N * 3), *dc = dt + N, *hw = dt + 2 * N;
     int *lab = malloc(sizeof(int) * N * 3), *src = lab + N, *q = lab + 2 * N;
     uint8_t *mask = calloc((size_t)N, 1), *out = NULL, *sk = NULL, *inp = NULL;
+    float *ex = malloc(sizeof(float) * N * 5);
     int j0;
     static const int DX[8] = {1, -1, 0, 0, 1, 1, -1, -1}, DY[8] = {0, 0, 1, -1, 1, -1, 1, -1};
-    if (Yo == NULL || dt == NULL || lab == NULL || mask == NULL) goto done;
+    if (Yo == NULL || dt == NULL || lab == NULL || mask == NULL || ex == NULL) goto done;
     for (i = 0; i < N; i++) { Yo[i] = lum_rgb(orig + i * 4); Ya[i] = lum_rgb(tones + i * 4); }
     anime_close(Yo, Co, tmp, W, H, 3);
     anime_close(Ya, Ca, tmp, W, H, 3);
@@ -1143,11 +1151,44 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
             if (ax >= cx - 1 && ax <= cx + 1 && ay >= cy - 1 && ay <= cy + 1) { s += tmp[jj]; cn++; } }
         hw[i] = 0.5f * s / (float)(cn > 0 ? cn : 1);
         (void)sxx; (void)syy; (void)sxy; }
-    /* each skeleton point a little towards the middle of its neighbours (a stair of points drawn as a smooth line) */
-    for (i = 0; i < N; i++) { int cx = i % W, cy = i / W, cn = 0, ax, ay; float mx2 = 0.0f, my2 = 0.0f;
-        tmp[i] = 0.0f; dc[i] = 0.0f; if (!sk[i]) continue;
-        for (ay = cy - 1; ay <= cy + 1; ay++) for (ax = cx - 1; ax <= cx + 1; ax++) { if (ax < 0 || ay < 0 || ax >= W || ay >= H || !sk[ay * W + ax]) continue; mx2 += (float)(ax - cx); my2 += (float)(ay - cy); cn++; }
-        tmp[i] = 0.5f * mx2 / (float)cn; dc[i] = 0.5f * my2 / (float)cn; }
+    /* (Rev23) the line drawn straight, not in a zigzag (the folds by the trousers' fly, Broly SSJ3's hair): spurs of one or
+       two points off a crossing are taken out; each skeleton point goes where the line really is (the middle of the
+       darkness of the line points nearest to it); then each point of a run (not an end, not a crossing) is drawn
+       towards the middle of its neighbours, ten times, so that a stair of points is a straight line */
+    {
+        float *PX = ex, *PY = ex + N, *NX = ex + 2 * N, *NY = ex + 3 * N, *WS = ex + 4 * N;
+        int it, pass2;
+        for (pass2 = 0; pass2 < 2; pass2++) for (i = 0; i < N; i++) {
+            int path[3], np = 0, cur = i, prev = -1, junction = 0, step;
+            if (!sk[i] || anime_sk_count(sk, W, H, i) != 1) continue;
+            path[np++] = i;
+            for (step = 0; step < 2; step++) {
+                int cx = cur % W, cy = cur / W, nx = -1, cnt = 0, jj, s2;
+                for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k]; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; jj = yy * W + xx;
+                    if (!sk[jj] || jj == prev) continue; for (s2 = 0; s2 < np && path[s2] != jj; s2++) {} if (s2 < np) continue; cnt++; nx = jj; }
+                if (cnt != 1) break;
+                if (anime_sk_count(sk, W, H, nx) >= 3) { junction = 1; break; }
+                if (np < 3) path[np++] = nx;
+                prev = cur; cur = nx;
+            }
+            if (junction && np <= 2) for (k = 0; k < np; k++) sk[path[k]] = 0;
+        }
+        for (i = 0; i < N; i++) { PX[i] = PY[i] = WS[i] = 0.0f; }
+        for (i = 0; i < N; i++) { int s2 = src[i]; float wgt; if (mask[i] != 1 || s2 < 0 || !sk[s2]) continue;
+            wgt = amt[i] + 0.05f; PX[s2] += wgt * (float)(i % W - s2 % W); PY[s2] += wgt * (float)(i / W - s2 / W); WS[s2] += wgt; }
+        for (i = 0; i < N; i++) { float ox = 0.0f, oy = 0.0f; if (!sk[i]) continue;
+            if (WS[i] > 0.0f) { ox = PX[i] / WS[i]; oy = PY[i] / WS[i]; }
+            PX[i] = (float)(i % W) + fmaxf(-1.0f, fminf(1.0f, ox)); PY[i] = (float)(i / W) + fmaxf(-1.0f, fminf(1.0f, oy)); }
+        for (it = 0; it < 10; it++) {
+            memcpy(NX, PX, sizeof(float) * N); memcpy(NY, PY, sizeof(float) * N);
+            for (i = 0; i < N; i++) { int cx = i % W, cy = i / W, c = 0; float sx = 0.0f, sy = 0.0f; if (!sk[i]) continue;
+                for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k], jj; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; jj = yy * W + xx; if (!sk[jj]) continue; sx += PX[jj]; sy += PY[jj]; c++; }
+                if (c < 2 || c > 3) continue;
+                NX[i] = 0.5f * PX[i] + 0.5f * sx / (float)c; NY[i] = 0.5f * PY[i] + 0.5f * sy / (float)c; }
+            memcpy(PX, NX, sizeof(float) * N); memcpy(PY, NY, sizeof(float) * N);
+        }
+        for (i = 0; i < N; i++) { tmp[i] = sk[i] ? fmaxf(-1.0f, fminf(1.0f, PX[i] - (float)(i % W))) : 0.0f; dc[i] = sk[i] ? fmaxf(-1.0f, fminf(1.0f, PY[i] - (float)(i / W))) : 0.0f; }
+    }
     /* what is painted over with the colour round the line: the line, and the soft edge the old one had beside it (a
        point next to it a little darker than round it), so nothing grey of the old line is left */
     inp = calloc((size_t)N, 1);
@@ -1172,17 +1213,17 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
     }
     { uint8_t *L = out + (size_t)n * N * 4;
         /* each skeleton point: R = which of its 8 neighbours are skeleton too (a bit each: E, W, S, N, SE, NE, SW, NW as
-           DX / DY), G = half the width / 4 texels (0 = no skeleton point), B, A = where in its texel the point is (x, y,
+           DX / DY), G = half the width / 4 texels (0 = no skeleton point), B, A = where the point is from its texel's middle (x, y,
            -0.5..0.5). gs.frag draws the segments from each point to its neighbours: the line whole, smooth, at any size */
         for (i = 0; i < N; i++) {
             int cx = i % W, cy = i / W, bits = 0;
             if (sk[i]) for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k]; if (xx >= 0 && yy >= 0 && xx < W && yy < H && sk[yy * W + xx]) bits |= 1 << k; }
             L[i * 4] = (uint8_t)bits;
             L[i * 4 + 1] = sk[i] ? (uint8_t)(fmaxf(1.0f, fminf(hw[i], 4.0f) / 4.0f * 255.0f + 0.5f)) : 0;
-            L[i * 4 + 2] = sk[i] ? (uint8_t)((fmaxf(-0.5f, fminf(0.5f, tmp[i])) + 0.5f) * 255.0f + 0.5f) : 128;
-            L[i * 4 + 3] = sk[i] ? (uint8_t)((fmaxf(-0.5f, fminf(0.5f, dc[i])) + 0.5f) * 255.0f + 0.5f) : 128; } }
+            L[i * 4 + 2] = sk[i] ? (uint8_t)((fmaxf(-1.0f, fminf(1.0f, tmp[i])) * 0.5f + 0.5f) * 255.0f + 0.5f) : 128;
+            L[i * 4 + 3] = sk[i] ? (uint8_t)((fmaxf(-1.0f, fminf(1.0f, dc[i])) * 0.5f + 0.5f) * 255.0f + 0.5f) : 128; } }
 done:
-    free(Yo); free(dt); free(lab); free(mask); free(sk); free(inp);
+    free(Yo); free(dt); free(lab); free(mask); free(sk); free(inp); free(ex);
     return out;
 }
 /* (made once a file: the same file comes again with every palette, every flash) */
@@ -4459,9 +4500,22 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
         /* (Rev22) the lines drawn clean (gs.frag extra.z, the portrait fade's field: not used by these draws): the
            outline's width in pixels of the picture as their widest, 0 = the texture has no line block */
         {
-            float od, ow;
-            GsDraw_OutlineLook(&od, &ow);
-            a.portrait[0] = sAnimeStrip.lines[form] ? ow * (float)SCALE : 0.0f;
+            /* (Rev23) textures/anime_lineas.txt: the widest a line inside a piece is drawn, in PS2 pixels (as the
+               outline's width in anime_outline.txt); without it, the outline's width */
+            static float lw = -1.0f;
+            if (lw < 0.0f) {
+                float od, ow;
+                FILE *lf = fopen("textures/anime_lineas.txt", "r");
+                GsDraw_OutlineLook(&od, &ow);
+                lw = ow;
+                if (lf != NULL) {
+                    float v;
+                    if (fscanf(lf, "%f", &v) == 1 && v > 0.05f && v <= 4.0f) lw = v;
+                    fclose(lf);
+                }
+                fprintf(stderr, "anime: lineas de dentro como mucho %.2f pixeles PS2 (anime_lineas.txt)\n", lw);
+            }
+            a.portrait[0] = sAnimeStrip.lines[form] ? lw * (float)SCALE : 0.0f;
             a.portrait[1] = 0.0f;
         }
         if (a.orig[2] != 0.0f && gsVuIdxCount + (count - 2) * 3 <= MAX_VU_IDX) {

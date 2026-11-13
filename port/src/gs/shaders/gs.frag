@@ -122,7 +122,7 @@ void main() {
 #ifndef NO_LINES // (d3d9_shaders.py: Shader Model 3 has no integer bits nor texelFetch; there the lines stay as the file has them)
         if (lineBlk > 0.5) {
             // The line block's skeleton points round this pixel (3 x 3 texels; G > 0): each at its texel's middle moved by
-            // B, A (-0.5..0.5), joined by a segment to each neighbour R marks (a bit each: E, W, S, N, SE, NE, SW, NW). The
+            // B, A (-1..1 texels, the line's real middle, straightened), joined by a segment to each neighbour R marks (a bit each: E, W, S, N, SE, NE, SW, NW). The
             // line is drawn black as far as half its width there (G * 4 texels) from those segments: at most half the
             // outline, never under half a pixel (a line far away is not lost); the edge one pixel soft at any size.
             ivec2 tsz = textureSize(tex, 0);
@@ -139,7 +139,7 @@ void main() {
                     vec4 sk = texelFetch(tex, ivec2(qq.x, qq.y + base), 0);
                     if (sk.g <= 0.0) continue;
                     float hwl = sk.g * 4.0, halfw = max(min(hwl, capw), min(hwl, 0.5 * tpx));
-                    vec2 pa = vec2(cc) + 0.5 + (sk.ba - 0.5);
+                    vec2 pa = vec2(cc) + 0.5 + (sk.ba - 0.5) * 2.0;
                     float dist = length(pt - pa);
                     int bits = int(sk.r * 255.0 + 0.5);
                     for (int k = 0; k < 8; k++) {
@@ -148,7 +148,7 @@ void main() {
                         qn.x = (qn.x % tsz.x + tsz.x) % tsz.x;
                         qn.y = p.orig.y > 0.5 ? clamp(qn.y, 0, bh - 1) : (qn.y % bh + bh) % bh;
                         vec4 sn = texelFetch(tex, ivec2(qn.x, qn.y + base), 0);
-                        vec2 pb = vec2(cn) + 0.5 + (sn.ba - 0.5), e = pb - pa;
+                        vec2 pb = vec2(cn) + 0.5 + (sn.ba - 0.5) * 2.0, e = pb - pa;
                         float tt = clamp(dot(pt - pa, e) / max(dot(e, e), 1e-4), 0.0, 1.0);
                         dist = min(dist, length(pt - pa - tt * e));
                     }
