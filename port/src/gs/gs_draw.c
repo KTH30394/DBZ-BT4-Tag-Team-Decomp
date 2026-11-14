@@ -1214,7 +1214,7 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
     for (i = 0; i < N; i++) {
         int a0 = tones[i * 4 + 3] == 0;
         if (Co[i] < 8.0f || Co[i] - Yo[i] < 20.0f || Yo[i] / Co[i] > 0.88f) continue;
-        if (!a0 && !face && Ca[i] >= 8.0f && Ya[i] / Ca[i] > 0.6f && Ya[i] / Ca[i] <= 0.78f) {
+        if (!a0 && Ca[i] >= 8.0f && Ya[i] / Ca[i] > 0.6f && Ya[i] / Ca[i] <= 0.78f) { /* (tenk4: faces too) */
             /* (Rev30) a light grey line one texel wide (7E847B between gold and grey on Vegeta's armour): no colour, both
                texels across it lighter: a line, drawn black (the user: every line black; it was left grey, and with
                no line added beside it the two colours met without one). Not on a face (its file as it is). */
@@ -1227,7 +1227,12 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
             if (cy > 0 && cy < H - 1 && tones[(i - W) * 4 + 3] && tones[(i + W) * 4 + 3] && Ya[i - W] > yl && Ya[i + W] > yl) thin = 1;
             if (mx - mn < 40 && thin) { mask[i] = 1; continue; }
         }
-        if (!a0 && (Ca[i] < 8.0f || Ya[i] / Ca[i] > 0.6f)) continue; /* (only what the file shows dark: not a ring the file took out, as a flat iris's, nor the inside of an eyebrow) */
+        /* (only what the file shows dark: not a ring the file took out, as a flat iris's, nor the inside of an eyebrow)
+           (tenk4, 14-nov-2026) where the original has a clear line (30 % darker than round it), the file's stroke is one
+           even if only 15 % darker: a soft or brownish stroke (the folds of Goku's trousers, the band of a boot, the
+           seams of Vegeta's armour) was left as the texture's own, thick and blurred close up, and its dark rests stayed
+           in the colour round it */
+        if (!a0 && (Ca[i] < 8.0f || Ya[i] / Ca[i] > (Yo[i] / Co[i] <= 0.7f ? 0.85f : 0.6f))) continue;
         if (!a0) { /* (Rev26) nor a colour: an iris (3999A5) is darker than the white round it but is no line (it was drawn
                       again as one, and it kept the line round it from being added) */
             const uint8_t *c = tones + i * 4;
@@ -1760,7 +1765,7 @@ static GsTex anime_texture(int id, int other, const uint32_t *px, uint32_t w, ui
         img.bytes[0] = w * h * n * 4;
         img.levels = 1;
         { /* (Rev22) the lines drawn clean: one more block after the tones (anime_lines_make) */
-            const uint8_t *aug = anime_lines_get(id, img.data[0], fileOriginal, w, h, n);
+            const uint8_t *aug = TexPack_AnimeBrillo(id) ? NULL : anime_lines_get(id, img.data[0], fileOriginal, w, h, n);
             if (aug != NULL) {
                 img.data[0] = aug;
                 img.h = (uint32_t)(2 * n + 2) * h;
@@ -5186,7 +5191,11 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
                 /* (Rev31) the width from textures/anime_lineas_grosor.txt (PS2 pixels; Rev30 took the outline's 0.8 and with
                    its soft edge they came out about three pixels of the screen: the user, "gordisimas") */
                 (void)ow2;
-                a.portrait[1] = face ? -anime_lines_width() * (float)SCALE : anime_lines_width() * (float)SCALE;
+                /* (tenk4, 14-nov-2026) faces too: their lines drawn again thin like every other (the user, close up in the
+                   museum: the face's lines thick, as the file has them, against the body's); a wide dark patch (a thick
+                   eyelid, a pupil) is left as the file has it (anime_lines_make: mask 2) */
+                a.portrait[1] = anime_lines_width() * (float)SCALE;
+                (void)face;
                 /* (Rev29) orig.w: how many times thicker the lines anime_lineas_gruesas.txt marks may get close up (gs.frag; a
                    sphere-effect draw keeps its alpha there and takes 2) */
                 a.orig[3] = sAnimeStrip.lines[form] ? anime_thick_times(sAnimeStrip.entry[form]) : 1.0f;
@@ -5225,6 +5234,10 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
             a.count = gsVuIdxCount - a.first;
         }
         au.misc[3] = layer == 5 ? 8.0f : layer == 3 ? 9.0f : viewSide != 0.0f ? 10.0f : 7.0f;
+        if (layer == 5 && TexPack_AnimeBrillo(sAnimeStrip.entry[form])) {
+            /* (tenk4, anime_brillo.txt) the gloss's own drawing in the folder's colours (vu0.vert layer 8: target.z) */
+            au.target[2] = 1.0f;
+        }
         if (layer == 1 && viewSide == 0.0f) {
             /* (the light a program 1 piece of this folder listed in anime_luz.txt is split by) */
             memcpy(sLuzLight, u.light, sizeof(sLuzLight));

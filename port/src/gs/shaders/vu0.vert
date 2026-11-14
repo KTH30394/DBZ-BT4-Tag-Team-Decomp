@@ -86,6 +86,13 @@ void main() {
         vColor = vec4(clamp(dot(u.light, vec4(inNormal.xyz, 1.0)) * 0.5 + 0.5, 0.0, 1.0),
                       (u.color0.r + u.color0.g + u.color0.b) / 765.0, anime_edge(w), u.color1.a / 255.0);
         vStq = vec3(inSt.xy, 1.0);
+        if (u.target.z > 0.5) {
+            // (tenk4, anime_brillo.txt: Freezer's purple) the gloss's own drawing: the anime colours looked up where layer 5
+            // looks its reflection map up (the file's tone block holds that map in the folder's colours), the first block
+            vec4 n1 = vec4(inNormal.xyz, 1.0);
+            vStq = vec3(dot(u.light, n1) * 0.5 + 0.5, dot(u.light2, n1) * 0.5 + 0.5, 1.0);
+            vColor.r = 0.0;
+        }
     } else if (u.misc.w == 10.0) {
         // PC only (gs_draw.c, the anime pass of a folder with anime_view.txt): as layer 7, but r is where this point's
         // surface faces across the picture (0 one side, 0.5 straight at the camera, 1 the other; light2.x: which side),

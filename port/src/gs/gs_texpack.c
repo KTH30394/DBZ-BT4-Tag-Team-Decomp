@@ -94,6 +94,8 @@ typedef struct AnimeFolder {
     uint64_t *up;      /* anime_up.txt: strips (their texture coordinates' hash, gs_draw.c) split up and down */
     int upCount;
     int view;          /* anime_view.txt: 1 / -1 across the picture, 2 / -2 up and down it, the sign the side; 0 = none */
+    int brillo;        /* (tenk4) anime_brillo.txt: program 1's anime pass takes the colours where layer 5 looks its
+                          reflection map up (the tone block holds that map drawn in the folder's colours), no lines */
     int *models;       /* anime_models.txt: the fighter models (file ids) the folder is for; none = any (TexPack_AnimeFolderAllows) */
     int modelCount, hasModels;
     uint64_t *edgeTex; /* anime_corte.txt: textures whose light / shadow edge is fixed (TexPack_AnimeEdge), and where */
@@ -269,6 +271,12 @@ static int folder_of(const char *dir) {
             a->view = 1;
         }
         a->view = a->view > 0 ? (a->view >= 2 ? 2 : 1) : (a->view <= -2 ? -2 : -1);
+        fclose(f);
+    }
+    snprintf(path, sizeof(path), "%sanime_brillo.txt", dir);
+    f = fopen(path, "r");
+    if (f != NULL) {
+        a->brillo = 1;
         fclose(f);
     }
     return sFolderCount++;
@@ -482,7 +490,7 @@ void TexPack_Init(void) {
         sBucket[h] = i + 1;
     }
     fprintf(stderr, "bt3: texture pack: %u replacement textures in %s (%u more with a name already seen)\n", sCount - dup, root, dup);
-    fprintf(stderr, "bt4 anime: build tenk4 (14-nov-2026, rev a; museo: R2/L2 zoom y cruceta para mover el modelo; tenk1 + contorno y uniones entre partes con el grosor y borde suave de las lineas de dentro; capas metalicas de Cell, Cell 2a y pantalon de Vegeta SSJ4 ocultas por nombre; texturas sin fila de luchador con sus colores anime: brillo de Freezer con sus 3 colores)\n");
+    fprintf(stderr, "bt4 anime: build tenk5 (14-nov-2026, rev a; todas las lineas por el codigo, caras incluidas; brillo de Freezer con su dibujo; museo: R2/L2 zoom y cruceta para mover el modelo; tenk1 + contorno y uniones entre partes con el grosor y borde suave de las lineas de dentro; capas metalicas de Cell, Cell 2a y pantalon de Vegeta SSJ4 ocultas por nombre; texturas sin fila de luchador con sus colores anime: brillo de Freezer con sus 3 colores)\n");
 }
 
 int TexPack_Count(void) {
@@ -854,6 +862,11 @@ int TexPack_AnimeIsHair(int id) {
         }
     }
     return 0;
+}
+
+int TexPack_AnimeBrillo(int id) {
+    int folder = TexPack_AnimeFolder(id);
+    return folder >= 0 ? sFolders[folder].brillo : 0;
 }
 
 int TexPack_AnimeView(int id) {
