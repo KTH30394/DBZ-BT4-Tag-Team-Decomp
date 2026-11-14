@@ -976,6 +976,60 @@ static int anime_held(int id, TexPackImage *img, int *cut) {
     return 1;
 }
 
+/* (tenk7, 14-nov-2026) An anime file at the texture's own size. A face file may be drawn larger (2, 4 or 8 times as wide,
+   each block as many times as high: the faces drawn clean at a higher resolution, so the close-ups are sharp); the
+   comparisons of colours (the original under another palette, the faces with no file) work at the texture's size, so
+   such a file is brought down to it here (each texel the middle of its square), kept by its id. The file itself is
+   uploaded as it is (anime_texture). */
+static int anime_held_native(int id, uint32_t w, uint32_t h, TexPackImage *img, int *cut) {
+    static struct { int id; uint32_t w, h, nb; uint8_t *px; } c[32];
+    static unsigned nx;
+    uint32_t s, nb, x, y, b;
+    int k;
+    if (!anime_held(id, img, cut)) {
+        return 0;
+    }
+    if (img->format != GS_TEXFMT_RGBA8 || w == 0 || h == 0 || img->w == w || img->w % w != 0) {
+        return 1;
+    }
+    s = img->w / w;
+    if (img->h % (h * s) != 0) {
+        return 1;
+    }
+    nb = img->h / (h * s);
+    for (k = 0; k < 32; k++) {
+        if (c[k].px != NULL && c[k].id == id && c[k].w == w && c[k].h == h && c[k].nb == nb) {
+            break;
+        }
+    }
+    if (k == 32) {
+        k = (int)(nx++ & 31);
+        free(c[k].px);
+        c[k].px = (uint8_t *)malloc((size_t)w * h * nb * 4);
+        if (c[k].px == NULL) {
+            return 0;
+        }
+        for (b = 0; b < nb; b++) {
+            for (y = 0; y < h; y++) {
+                for (x = 0; x < w; x++) {
+                    const uint8_t *src = img->data[0] + ((size_t)(b * h * s + y * s + s / 2) * img->w + x * s + s / 2) * 4;
+                    memcpy(c[k].px + ((size_t)(b * h + y) * w + x) * 4, src, 4);
+                }
+            }
+        }
+        c[k].id = id;
+        c[k].w = w;
+        c[k].h = h;
+        c[k].nb = nb;
+    }
+    img->data[0] = c[k].px;
+    img->w = w;
+    img->h = h * c[k].nb;
+    img->bytes[0] = w * h * c[k].nb * 4;
+    img->levels = 1;
+    return 1;
+}
+
 /* The original of an anime file's colours (w x h): as seen in this session, else the file's block under its colours;
    NULL without either */
 static const uint8_t *anime_original(int id, uint32_t w, uint32_t h) {
@@ -986,7 +1040,7 @@ static const uint8_t *anime_original(int id, uint32_t w, uint32_t h) {
             return (const uint8_t *)sAnimeOrig[k].px;
         }
     }
-    if (!anime_held(id, &img, &cut) || img.format != GS_TEXFMT_RGBA8 || img.w != w) {
+    if (!anime_held_native(id, w, h, &img, &cut) || img.format != GS_TEXFMT_RGBA8 || img.w != w) {
         return NULL;
     }
     {
@@ -1760,31 +1814,42 @@ static GsTex anime_texture(int id, int other, const uint32_t *px, uint32_t w, ui
     if (!anime_held(id, &img, &c)) {
         return 0;
     }
+    /* (tenk7) a file drawn larger (2, 4 or 8 times: the faces drawn clean, anime_held_native): uploaded as it is, the
+       shader reads it by the texture's own coordinates. Its lines are the file's (no line block made from it). */
+    uint32_t hs = 1, W2 = w, H2 = h;
+    if (img.format == GS_TEXFMT_RGBA8 && img.w > w && w != 0 && img.w % w == 0) {
+        hs = img.w / w;
+        if (hs != 2 && hs != 4 && hs != 8) {
+            return 0;
+        }
+        W2 = w * hs;
+        H2 = h * hs;
+    }
     {
         int cw[3], cn = TexPack_AnimeCapas(id, cw);
         if (cn > 0) {
             /* anime_capas.txt: 4 or 5 tones, 5 or 6 blocks (the tones from the lit side, then the original) */
-            if (img.format != GS_TEXFMT_RGBA8 || img.w != w || img.h != (uint32_t)(cn + 3) * h) {
+            if (img.format != GS_TEXFMT_RGBA8 || img.w != W2 || img.h != (uint32_t)(cn + 3) * H2) {
                 return 0;
             }
             n = cn + 2;
         } else {
-            if (img.format != GS_TEXFMT_RGBA8 || img.w != w || (img.h != 2 * h && img.h != 3 * h && img.h != 4 * h)) {
+            if (img.format != GS_TEXFMT_RGBA8 || img.w != W2 || (img.h != 2 * H2 && img.h != 3 * H2 && img.h != 4 * H2)) {
                 return 0;
             }
             /* Four blocks: three tones (lit, middle, shadow) and the original (gs_texpack.h, TexPack_AnimeMid) */
-            n = img.h == 4 * h ? 3 : 2;
+            n = img.h == 4 * H2 ? 3 : 2;
         }
     }
     /* A block under the colours (gs_texpack.h): the texture as it was when its anime colours were made. Only the
        colours are uploaded. */
-    if (img.h == (uint32_t)(n + 1) * h) {
-        fileOriginal = img.data[0] + (size_t)w * h * n * 4;
-        img.h = n * h;
-        img.bytes[0] = w * h * n * 4;
+    if (img.h == (uint32_t)(n + 1) * H2) {
+        fileOriginal = hs > 1 ? anime_original(id, w, h) : img.data[0] + (size_t)w * h * n * 4;
+        img.h = n * H2;
+        img.bytes[0] = W2 * H2 * n * 4;
         img.levels = 1;
         { /* (Rev22) the lines drawn clean: one more block after the tones (anime_lines_make) */
-            const uint8_t *aug = TexPack_AnimeBrillo(id) ? NULL : anime_lines_get(id, img.data[0], fileOriginal, w, h, n);
+            const uint8_t *aug = (TexPack_AnimeBrillo(id) || hs > 1) ? NULL : anime_lines_get(id, img.data[0], fileOriginal, w, h, n);
             if (aug != NULL) {
                 img.data[0] = aug;
                 img.h = (uint32_t)(2 * n + 2) * h;
@@ -1849,23 +1914,24 @@ static GsTex anime_texture(int id, int other, const uint32_t *px, uint32_t w, ui
         }
         /* (a copy: the one held stays the original's) */
         int blk = *lines ? 2 * n + 2 : n, toneBlk = *lines ? 2 * n : n; /* (Rev24: both sets of tones get the flash) */
-        a = (uint8_t *)malloc((size_t)w * h * blk * 4);
+        a = (uint8_t *)malloc((size_t)W2 * H2 * blk * 4);
         if (a == NULL) {
             return 0;
         }
-        memcpy(a, img.data[0], (size_t)w * h * blk * 4);
+        memcpy(a, img.data[0], (size_t)W2 * H2 * blk * 4);
         img.data[0] = a;
-        img.bytes[0] = w * h * blk * 4;
-        for (y = 0; y < h; y++) {
-            for (x = 0; x < w; x++) {
+        img.bytes[0] = W2 * H2 * blk * 4;
+        for (y = 0; y < H2; y++) {
+            for (x = 0; x < W2; x++) {
+                uint32_t sx = x / hs, sy = y / hs; /* (tenk7: the texel of the texture this one of a larger file lies in) */
                 for (k = 0; k < 3; k++) {
-                    int add = (int)px8[(y * w + x) * 4 + k] - (int)o[(y * w + x) * 4 + k], v, b;
+                    int add = (int)px8[(sy * w + sx) * 4 + k] - (int)o[(sy * w + sx) * 4 + k], v, b;
                     if (add <= 0) {
                         continue;
                     }
                     for (b = 0; b < toneBlk; b++) {
-                        v = a[((y + b * h) * w + x) * 4 + k] + add;
-                        a[((y + b * h) * w + x) * 4 + k] = (uint8_t)(v > 255 ? 255 : v);
+                        v = a[((y + b * H2) * W2 + x) * 4 + k] + add;
+                        a[((y + b * H2) * W2 + x) * 4 + k] = (uint8_t)(v > 255 ? 255 : v);
                     }
                 }
             }
@@ -2288,7 +2354,7 @@ static int anime_derive_try(uint64_t texHash, const uint32_t *px, uint32_t w, ui
                 const uint8_t *orig;
                 uint32_t fc[256], nf = 0, q, j, err = 0, worstBig = 0;
                 int cw[3], cn;
-                if (TexPack_AnimeIsHidden(ids[e]) || TexPack_AnimeIsGloss(ids[e]) || !anime_held(ids[e], &img, &cut) ||
+                if (TexPack_AnimeIsHidden(ids[e]) || TexPack_AnimeIsGloss(ids[e]) || !anime_held_native(ids[e], w, h, &img, &cut) ||
                     img.format != GS_TEXFMT_RGBA8 || img.w != w) {
                     continue;
                 }
@@ -2334,7 +2400,7 @@ static int anime_derive_try(uint64_t texHash, const uint32_t *px, uint32_t w, ui
             uint8_t *a = malloc((size_t)w * h * 8);
             uint32_t q, j;
             const uint8_t *orig, *lit, *sh;
-            anime_held(bestId, &img, &cut);
+            anime_held_native(bestId, w, h, &img, &cut);
             orig = img.data[0] + (size_t)w * h * (best - 1) * 4;
             lit = img.data[0];
             sh = img.data[0] + (size_t)w * h * (best - 2) * 4;
