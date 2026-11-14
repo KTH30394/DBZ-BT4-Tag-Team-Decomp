@@ -5194,8 +5194,9 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
                 /* (tenk4, 14-nov-2026) faces too: their lines drawn again thin like every other (the user, close up in the
                    museum: the face's lines thick, as the file has them, against the body's); a wide dark patch (a thick
                    eyelid, a pupil) is left as the file has it (anime_lines_make: mask 2) */
-                a.portrait[1] = anime_lines_width() * (float)SCALE;
-                (void)face;
+                /* (tenk5 rev c) BACK to the file for faces: drawn again, their thick upper eyelids came out as thin lines
+                   (the user: "esa putisima cara de mierda", as Rev29's); a face shows its file with its lines black */
+                a.portrait[1] = face ? -anime_lines_width() * (float)SCALE : anime_lines_width() * (float)SCALE;
                 /* (Rev29) orig.w: how many times thicker the lines anime_lineas_gruesas.txt marks may get close up (gs.frag; a
                    sphere-effect draw keeps its alpha there and takes 2) */
                 a.orig[3] = sAnimeStrip.lines[form] ? anime_thick_times(sAnimeStrip.entry[form]) : 1.0f;
