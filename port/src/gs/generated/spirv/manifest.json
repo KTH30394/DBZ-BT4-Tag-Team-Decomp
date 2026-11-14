@@ -32,8 +32,8 @@
     "spv_sha256": "a968c60d2b6bbb96a6b5f8282b9e4b52f74e015de6f49ba5f2a8598bce1d6ca1"
   },
   "outline.frag": {
-    "source_sha256": "f7087cfb8013fcf09b72db60e5a650b55951562d3c5a0116789be6a7740efacb",
-    "spv_sha256": "cb34d2683aa49a5ff7ec3f27219349c9b96b4ea91a87c6d121b58f325245cb5a"
+    "source_sha256": "41141fa7043e8a5d1451c2f0ca36dd4b8aac0332a104a265289a4a4e77090bee",
+    "spv_sha256": "54e97d8d7d5b3f88390ee2d2a4f6669d8dd0991852a6842e556fa62025dc223b"
   },
   "alphakey.frag": {
     "source_sha256": "d5bbdb44c879bf72a205cbc26707db44e3ae6de7ffbe97b4e9ed56dfd8427bc2",
