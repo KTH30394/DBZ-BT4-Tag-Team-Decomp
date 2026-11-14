@@ -316,6 +316,7 @@ typedef struct Tex {
     int animeCount;
     int arow;                /* a fighter's texture: the row of the alpha table its palette has (BtlObjMdl_InitAlphaSlots
                                 writes slot + row * 15 into its alpha: each fighter on the screen its own row); -1 = none */
+    int hrow;                /* (tenk2) the row its pixels carry (anime_px_row over all of them), -1 = none */
     int mrow, mmodel;        /* (anime_models.txt) the row the texture's pixels have and the model that row had when it was
                                 made: with another model in that row since, it is made again (anime_tex_current) */
     uint64_t markForms;      /* the form folders this texture marks (TexPack_AnimeFoldersMarking), a bit each */
@@ -2028,6 +2029,13 @@ static int sDeriveRow = -1; /* (anime_derive) the row of the texture being made 
 /* (anime_models.txt) a decoded texture still right: its row has the model it was made for. Else it is let go (its
    key no longer matches: never found again) and made anew for the fighter now in that row. */
 static int anime_tex_current(Tex *c) {
+    if (c->mrow == -2) {
+        /* (tenk2) a texture without a row that has anime files, decoded before any fighter's row was known: made again
+           once one is (anime_folder_ok then has the fighter drawn) */
+        if (sFighterRowNow < 0) return 1;
+        c->gen ^= 0xA5A5A5A5u;
+        return 0;
+    }
     if (c->mrow < 0 || anime_row_model(c->mrow) == c->mmodel) {
         return 1;
     }
@@ -2644,7 +2652,7 @@ static GsTex texture_get(int ctx, int menuHd) {
     uint64_t markForms = 0;
     uint32_t rampHash = 0, packName = 0;
     uint64_t texName = 0;
-    int rampFlat = 0, glossRow = -1;
+    int rampFlat = 0, glossRow = -1, rowlessFound = 0;
     if (toonSharp > 0) { gen ^= 0x70017000u + (uint32_t)toonSharp * 0x9E3779B1u + (uint32_t)toonCut * 0x85EBCA77u; }
     if (sTexPackOn && TexPack_Count() != 0) {
         gen ^= 0x5BD1E995u; /* with the pack and without it are different textures: switching it takes effect at once */
@@ -2896,6 +2904,7 @@ static GsTex texture_get(int ctx, int menuHd) {
         int row = anime_px_row(px, tw * th), k = 0;
         if (row < 0) {
             row = sFighterRowNow; /* (tenk2: a texture without a row, of the fighter being drawn) */
+            rowlessFound = row < 0 ? animeFound : 0;
         }
         for (f = 0; f < animeFound; f++) {
             if (anime_folder_ok(TexPack_AnimeFolder(animeIds[f]), row)) {
@@ -3007,6 +3016,10 @@ static GsTex texture_get(int ctx, int menuHd) {
     if (t->mrow < 0 && animeCount != 0 && TexPack_AnimeAnyModels()) {
         t->mrow = sFighterRowNow; /* (tenk2: made for the fighter drawn then; made again if that row's model changes) */
     }
+    if (t->mrow < 0 && animeCount == 0 && rowlessFound > 0) {
+        t->mrow = -2; /* (tenk2: anime_tex_current makes it again when a fighter's row is known) */
+    }
+    t->hrow = TexPack_AnimeAnyModels() && bits <= 8 && px != NULL && rw == tw && rh == th ? anime_px_row(px, tw * th) : -1;
     t->mmodel = anime_row_model(t->mrow);
     t->last = gGsFrame;
     t->replaced = replaced ? 1 : sharedText ? 3 : menuText ? 2 : 0;
@@ -4613,8 +4626,8 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
            texture whose palette gives no row (Cell's metallic layer 2ea86cd1, Vegeta SSJ4's trousers' gloss 3833d987 and
            Freezer's 9a131c57 were drawn: no anime colours on them and no row, so neither test below hid them) */
         int nameRow;
-        if (layer == 0 && sLast != NULL && sLast->tex == d.tex && sLast->arow >= 0) {
-            sFighterRowNow = sLast->arow;
+        if (layer == 0 && sLast != NULL && sLast->tex == d.tex && (sLast->arow >= 0 || (sLast->animeCount != 0 && sLast->hrow >= 0))) {
+            sFighterRowNow = sLast->arow >= 0 ? sLast->arow : sLast->hrow;
         }
         nameRow = sLast != NULL ? (sLast->glossRow >= 0 ? sLast->glossRow : sFighterRowNow) : -1;
         sHiddenStrip = sLast != NULL && sLast->tex == d.tex && !d.tex_is_target &&
@@ -4627,6 +4640,19 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
                          ((layer == 0 && gVuProgram1 && TexPack_GlossFor(sLast->texName, anime_row_model(nameRow))) ||
                           TexPack_HideFor(sLast->texName, anime_row_model(nameRow))))) ? vertices : NULL;
         sHiddenCount = count;
+        if (sHiddenStrip == vertices && getenv("BT3_ANIME_LOG") != NULL && sLast != NULL) {
+            /* (once a texture: a strip not drawn, why, to tell by the log that a listed layer is hidden) */
+            static uint64_t seenH[64];
+            static unsigned nH;
+            unsigned m;
+            for (m = 0; m < nH && seenH[m] != sLast->texName; m++) {
+            }
+            if (m == nH && nH < 64) {
+                seenH[nH++] = sLast->texName;
+                fprintf(stderr, "anime: hidden %016llx (layer %d, program %d, anime %d, row %d)\n", (unsigned long long)sLast->texName,
+                        layer, gVuProgram1, sLast->animeCount, nameRow);
+            }
+        }
     }
     /* (its own layers only: the vertices may sit where the next program's are, a shadow's, a debris's) */
     if (sHiddenStrip != NULL && sHiddenStrip == vertices && sHiddenCount == count &&
@@ -4922,8 +4948,10 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
                 }
                 if (m == n5 && n5 < 64) {
                     seen5[n5++] = sStripPack;
-                    fprintf(stderr, "anime: program 1 plain %08x (%u vertices; layer 0 anime %d, hidden %d)\n", sStripPack, count,
-                            sAnimeStrip.vertices == vertices, sHiddenStrip == vertices);
+                    fprintf(stderr, "anime: program 1 plain %08x (%u vertices; layer 0 anime %d, hidden %d; fighter row %d, "
+                            "texture row %d, name %d, gloss row %d)\n", sStripPack, count,
+                            sAnimeStrip.vertices == vertices, sHiddenStrip == vertices, sFighterRowNow,
+                            sLast != NULL ? sLast->hrow : -9, sLast != NULL && sLast->texName != 0, sLast != NULL ? sLast->glossRow : -9);
                 }
             }
             if (!anime && layer == 1) { /* (kept sorted: the line is the same while the set is) */
