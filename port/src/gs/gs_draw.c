@@ -2025,6 +2025,24 @@ static int sFighterRowNow = -1;
 static int anime_folder_ok(int folder, int row) {
     return TexPack_AnimeFolderAllows(folder, anime_row_model(row));
 }
+/* (tenk2) a texture whose pixels carry no row: a folder of ANY fighter on the screen (the row of the strip drawn before it
+   is not his: Cell's layer came after the other fighter's strips). Such names are each one fighter's own. */
+static int anime_folder_ok_any(int folder) {
+    int r;
+    for (r = 0; r < 64; r++) {
+        if (sRowModel[r] > 0 && TexPack_AnimeFolderAllows(folder, sRowModel[r] - 1)) return 1;
+    }
+    return 0;
+}
+static int anime_listed_any(uint64_t tex, int gloss) {
+    int r;
+    if (tex == 0) return 0;
+    for (r = 0; r < 64; r++) {
+        if (sRowModel[r] <= 0) continue;
+        if (TexPack_HideFor(tex, sRowModel[r] - 1) || (gloss && TexPack_GlossFor(tex, sRowModel[r] - 1))) return 1;
+    }
+    return 0;
+}
 static int sDeriveRow = -1; /* (anime_derive) the row of the texture being made */
 /* (anime_models.txt) a decoded texture still right: its row has the model it was made for. Else it is let go (its
    key no longer matches: never found again) and made anew for the fighter now in that row. */
@@ -2032,7 +2050,9 @@ static int anime_tex_current(Tex *c) {
     if (c->mrow == -2) {
         /* (tenk2) a texture without a row that has anime files, decoded before any fighter's row was known: made again
            once one is (anime_folder_ok then has the fighter drawn) */
-        if (sFighterRowNow < 0) return 1;
+        int r, any = 0;
+        for (r = 0; r < 64; r++) any |= sRowModel[r] > 0;
+        if (!any) return 1;
         c->gen ^= 0xA5A5A5A5u;
         return 0;
     }
@@ -2901,13 +2921,13 @@ static GsTex texture_get(int ctx, int menuHd) {
     }
     if (animeFound > 0 && px != NULL && TexPack_AnimeAnyModels()) {
         /* anime_models.txt: only the folders for this fighter's model */
-        int row = anime_px_row(px, tw * th), k = 0;
-        if (row < 0) {
-            row = sFighterRowNow; /* (tenk2: a texture without a row, of the fighter being drawn) */
-            rowlessFound = row < 0 ? animeFound : 0;
+        int row = anime_px_row(px, tw * th), k = 0, anyKnown = 0, r;
+        for (r = 0; r < 64; r++) anyKnown |= sRowModel[r] > 0;
+        if (row < 0 && !anyKnown) {
+            rowlessFound = animeFound; /* (tenk2: made again once a fighter is known, anime_tex_current) */
         }
         for (f = 0; f < animeFound; f++) {
-            if (anime_folder_ok(TexPack_AnimeFolder(animeIds[f]), row)) {
+            if (row >= 0 ? anime_folder_ok(TexPack_AnimeFolder(animeIds[f]), row) : anime_folder_ok_any(TexPack_AnimeFolder(animeIds[f]))) {
                 animeIds[k++] = animeIds[f];
             }
         }
@@ -3013,9 +3033,6 @@ static GsTex texture_get(int ctx, int menuHd) {
     t->texa = texa;
     t->gen = gen;
     t->mrow = TexPack_AnimeAnyModels() && bits <= 8 && px != NULL && rw == tw && rh == th ? anime_px_row(px, tw * th) : -1;
-    if (t->mrow < 0 && animeCount != 0 && TexPack_AnimeAnyModels()) {
-        t->mrow = sFighterRowNow; /* (tenk2: made for the fighter drawn then; made again if that row's model changes) */
-    }
     if (t->mrow < 0 && animeCount == 0 && rowlessFound > 0) {
         t->mrow = -2; /* (tenk2: anime_tex_current makes it again when a fighter's row is known) */
     }
@@ -4629,16 +4646,20 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
         if (layer == 0 && sLast != NULL && sLast->tex == d.tex && (sLast->arow >= 0 || (sLast->animeCount != 0 && sLast->hrow >= 0))) {
             sFighterRowNow = sLast->arow >= 0 ? sLast->arow : sLast->hrow;
         }
-        nameRow = sLast != NULL ? (sLast->glossRow >= 0 ? sLast->glossRow : sFighterRowNow) : -1;
+        nameRow = sLast != NULL ? sLast->glossRow : -1;
         sHiddenStrip = sLast != NULL && sLast->tex == d.tex && !d.tex_is_target &&
                        ((sLast->animeCount != 0 &&
                          (TexPack_AnimeIsHidden(sLast->animeEntry[0]) ||
                           (layer == 0 && gVuProgram1 && TexPack_AnimeIsGloss(sLast->animeEntry[0])))) ||
                         /* (a gloss pass of a listed texture without anime colours, Vegeta SSJ4's trousers: by the
                            fighter's model, so only the folder of that fighter hides it) */
-                        (sLast->texName != 0 && nameRow >= 0 &&
-                         ((layer == 0 && gVuProgram1 && TexPack_GlossFor(sLast->texName, anime_row_model(nameRow))) ||
-                          TexPack_HideFor(sLast->texName, anime_row_model(nameRow))))) ? vertices : NULL;
+                        (sLast->texName != 0 &&
+                         (nameRow >= 0 ? ((layer == 0 && gVuProgram1 && TexPack_GlossFor(sLast->texName, anime_row_model(nameRow))) ||
+                                          TexPack_HideFor(sLast->texName, anime_row_model(nameRow)))
+                                       : 0) ) ||
+                        /* (tenk2) a listed texture whose pixels carry no row: by any fighter on the screen */
+                        (sLast->texName != 0 && sLast->hrow < 0 && sLast->glossRow < 0 &&
+                         anime_listed_any(sLast->texName, layer == 0 && gVuProgram1))) ? vertices : NULL;
         sHiddenCount = count;
         if (sHiddenStrip == vertices && getenv("BT3_ANIME_LOG") != NULL && sLast != NULL) {
             /* (once a texture: a strip not drawn, why, to tell by the log that a listed layer is hidden) */
