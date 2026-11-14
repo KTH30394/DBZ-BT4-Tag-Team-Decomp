@@ -2927,7 +2927,10 @@ static GsTex texture_get(int ctx, int menuHd) {
             rowlessFound = animeFound; /* (tenk2: made again once a fighter is known, anime_tex_current) */
         }
         for (f = 0; f < animeFound; f++) {
-            if (row >= 0 ? anime_folder_ok(TexPack_AnimeFolder(animeIds[f]), row) : anime_folder_ok_any(TexPack_AnimeFolder(animeIds[f]))) {
+            int fo = TexPack_AnimeFolder(animeIds[f]);
+            /* (tenk2) program 1's textures (the second pass over a part) carry another row in their palette (the other
+               fighter's): any fighter on the screen */
+            if (row >= 0 ? (anime_folder_ok(fo, row) || (gVuProgram1 && anime_folder_ok_any(fo))) : anime_folder_ok_any(fo)) {
                 animeIds[k++] = animeIds[f];
             }
         }
@@ -4658,7 +4661,7 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
                                           TexPack_HideFor(sLast->texName, anime_row_model(nameRow)))
                                        : 0) ) ||
                         /* (tenk2) a listed texture whose pixels carry no row: by any fighter on the screen */
-                        (sLast->texName != 0 && sLast->hrow < 0 && sLast->glossRow < 0 &&
+                        (sLast->texName != 0 && ((sLast->hrow < 0 && sLast->glossRow < 0) || gVuProgram1) &&
                          anime_listed_any(sLast->texName, layer == 0 && gVuProgram1))) ? vertices : NULL;
         sHiddenCount = count;
         if (sHiddenStrip == vertices && getenv("BT3_ANIME_LOG") != NULL && sLast != NULL) {
