@@ -490,7 +490,7 @@ void TexPack_Init(void) {
         sBucket[h] = i + 1;
     }
     fprintf(stderr, "bt3: texture pack: %u replacement textures in %s (%u more with a name already seen)\n", sCount - dup, root, dup);
-    fprintf(stderr, "bt4 anime: build tenk5 (14-nov-2026, rev c; lineas suaves por el codigo, caras como su archivo; brillo de Freezer con su dibujo; museo: R2/L2 zoom y cruceta para mover el modelo; tenk1 + contorno y uniones entre partes con el grosor y borde suave de las lineas de dentro; capas metalicas de Cell, Cell 2a y pantalon de Vegeta SSJ4 ocultas por nombre; texturas sin fila de luchador con sus colores anime: brillo de Freezer con sus 3 colores)\n");
+    fprintf(stderr, "bt4 anime: build tenk6 (14-nov-2026, rev a; de cerca todas las lineas y el contorno hasta 2x, la M hasta 4x (anime_lineas_cerca.txt); lineas suaves por el codigo, caras como su archivo; brillo de Freezer con su dibujo; museo: R2/L2 zoom y cruceta para mover el modelo; tenk1 + contorno y uniones entre partes con el grosor y borde suave de las lineas de dentro; capas metalicas de Cell, Cell 2a y pantalon de Vegeta SSJ4 ocultas por nombre; texturas sin fila de luchador con sus colores anime: brillo de Freezer con sus 3 colores)\n");
 }
 
 int TexPack_Count(void) {

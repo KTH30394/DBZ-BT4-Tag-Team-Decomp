@@ -151,7 +151,12 @@ void main() {
             ivec2 c0 = ivec2(floor(pt));
             bool faceT = p.extra.w < 0.0;
             float hhW = min(0.5 * abs(p.extra.w) * tpx, 6.0);
-            float kThick = p.rect.z > 0.5 ? 2.0 : max(p.orig.w, 1.0);
+            // (tenk6, 14-nov-2026) every line grows close up as the marked ones did (the user: "que se vea con ese grosor
+            // cuando te acercas"): its own width in the file, never thinner than the line far away nor wider than kAll
+            // times it; the marked ones (Majin Vegeta's M) up to kThick. orig.w = 100 * kAll + kThick (gs_draw.c,
+            // textures/anime_lineas_cerca.txt: 2 and 4)
+            float kAll = p.rect.z > 0.5 ? 2.0 : max(floor(p.orig.w / 100.0), 1.0);
+            float kThick = p.rect.z > 0.5 ? 2.0 : max(p.orig.w - 100.0 * floor(p.orig.w / 100.0), 1.0);
             // (Rev31) soft half a pixel either side of the width (anime_lineas_grosor.txt, extra.w): Rev30's edge, black to a
             // quarter pixel short and soft for 3/4 beyond, with the outline's width, came out about 3 pixels of the screen
             float a0 = 0.5 * tpx, a1 = 0.5 * tpx, ink = 0.0, bestD = 1e6;
@@ -172,7 +177,8 @@ void main() {
                 }
                 if (gS > 0.0) {
                     float g255S = gS * 255.0;
-                    float hhS = g255S > 191.5 && g255S < 254.5 ? clamp((g255S - 192.0) / 62.0 * 3.0, hhW, kThick * hhW) : hhW;
+                    float hhS = g255S > 191.5 && g255S < 254.5 ? clamp((g255S - 192.0) / 62.0 * 3.0, hhW, kThick * hhW)
+                              : g255S < 191.5 ? clamp(gS * 4.0, hhW, kAll * hhW) : hhW;
                     ink = 1.0 - smoothstep(hhS - a0, hhS + a1, dS);
                 }
             } else {
@@ -188,7 +194,8 @@ void main() {
                             if (sk.g <= 0.0) continue;
                             float g255 = sk.g * 255.0;
                             bool added = g255 > 254.5, thick = !added && g255 > 191.5;
-                            float hh = thick ? clamp((g255 - 192.0) / 62.0 * 3.0, hhW, kThick * hhW) : hhW;
+                            float hh = thick ? clamp((g255 - 192.0) / 62.0 * 3.0, hhW, kThick * hhW)
+                                     : added ? hhW : clamp(sk.g * 4.0, hhW, kAll * hhW);
                             vec2 pa = vec2(cc) + 0.5 + (sk.ba - 0.5) * 2.0;
                             float dist = length(pt - pa);
                             vec2 cp = pa;

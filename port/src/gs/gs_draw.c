@@ -1172,6 +1172,25 @@ static float anime_lines_width(void) {
     }
     return w;
 }
+/* (tenk6, 14-nov-2026) close up every line grows with the model up to [0] times its width far away, the marked ones
+   (anime_lineas_gruesas.txt) up to [1]; the outline and seams as the lines: textures/anime_lineas_cerca.txt "2 4" */
+static float anime_lines_near(int which) {
+    static float k[2] = {-1.0f, 4.0f};
+    if (k[0] < 0.0f) {
+        FILE *f = fopen("textures/anime_lineas_cerca.txt", "r");
+        float x = 2.0f, y = 4.0f;
+        k[0] = 2.0f;
+        if (f != NULL) {
+            if (fscanf(f, "%f %f", &x, &y) == 2 && x >= 1.0f && x <= 9.0f && y >= 1.0f && y <= 9.0f) {
+                k[0] = x;
+                k[1] = y;
+            }
+            fclose(f);
+        }
+        fprintf(stderr, "anime: lineas de cerca hasta %.1f veces, las marcadas hasta %.1f (anime_lineas_cerca.txt)\n", k[0], k[1]);
+    }
+    return k[which != 0];
+}
 static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint32_t w, uint32_t h, int n, int face) {
     int W = (int)w, H = (int)h, N = W * H, i, x, y, k, t, changed, any = 0;
     uint8_t *tn = malloc((size_t)N * 4 * n);
@@ -4493,6 +4512,18 @@ void GsDraw_OutlineCaps(float caps[16]) {
        lines' width in pixels of the picture (anime_lineas_grosor.txt x SCALE, as gs.frag's |extra.w|), outline.frag
        draws a line that wide with the same soft edge (+-0.5 px) and black; 0 = the Rev30 outline */
     caps[0] = anime_lines_width() * (float)SCALE;
+    {
+        /* (tenk6) close up the outline grows as the lines inside do: the nearest fighter's face-line width on the screen
+           (sOutlineCapShown: cap * ppu / the outline's width, gathered from the anime pass) against the lines' width,
+           1..kAll times */
+        float od, ow, best = 0.0f, f;
+        int r;
+        GsDraw_OutlineLook(&od, &ow);
+        for (r = 0; r < 16; r++) if (sOutlineCapShown[r] > best) best = sOutlineCapShown[r];
+        f = anime_lines_width() > 0.0f ? best * ow / anime_lines_width() : 1.0f;
+        f = f < 1.0f ? 1.0f : f > anime_lines_near(0) ? anime_lines_near(0) : f;
+        caps[0] *= f;
+    }
 }
 /* GS pixels (down the screen) one unit of the model is at the middle of this strip: vu0.vert's screen matrix (VU 14..17)
    times bone A (0..3, pivot 8), its y row's change across the model's x, y, z at that point */
@@ -5200,6 +5231,13 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
                 /* (Rev29) orig.w: how many times thicker the lines anime_lineas_gruesas.txt marks may get close up (gs.frag; a
                    sphere-effect draw keeps its alpha there and takes 2) */
                 a.orig[3] = sAnimeStrip.lines[form] ? anime_thick_times(sAnimeStrip.entry[form]) : 1.0f;
+                {
+                    /* (tenk6, 14-nov-2026) every line grows close up to kAll times (its width in the file, as the marked ones
+                       did), the marked ones to kThick: textures/anime_lineas_cerca.txt "2 4"; orig.w = 100 * kAll + kThick */
+                    if (sAnimeStrip.lines[form]) {
+                        a.orig[3] = 100.0f * floorf(anime_lines_near(0)) + (a.orig[3] > 1.0f ? anime_lines_near(1) : 1.0f);
+                    }
+                }
             }
             if (sAnimeStrip.row >= 0 && sAnimeStrip.row < 16) {
                 float od, ow, ppu = anime_px_per_unit(consts, vertices, count), share;
