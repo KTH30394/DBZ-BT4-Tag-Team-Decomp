@@ -1281,6 +1281,21 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
     int j0;
     static const int DX[8] = {1, -1, 0, 0, 1, 1, -1, -1}, DY[8] = {0, 0, 1, -1, 1, -1, 1, -1};
     if (Yo == NULL || dt == NULL || lab == NULL || mask == NULL || ex == NULL || addf == NULL || aox == NULL) goto done;
+    /* (tenk8, 14-nov-2026) a texture of Super Saiyan hair (most of it golden): its strokes inside the locks are drawn thick
+       in the file (3 to 5 texels: Gohan's back locks and most Super Saiyans', the user: "las lineas de dentro de la textura
+       muy gordas") and were left as a patch, the file's own width; there a stroke up to 5 texels each side of its middle is
+       a line, drawn as wide as every other line */
+    int hair = 0;
+    if (!face) {
+        int gold = 0, op = 0;
+        for (i = 0; i < N; i++) {
+            const uint8_t *c = tones + i * 4;
+            if (c[3] == 0) continue;
+            op++;
+            if (c[0] >= 190 && c[1] >= 140 && c[2] <= 170 && c[0] > c[2] + 50) gold++;
+        }
+        hair = op > 0 && gold * 100 >= op * 45;
+    }
     for (i = 0; i < N; i++) { Yo[i] = lum_rgb(orig + i * 4); Ya[i] = lum_rgb(tones + i * 4); }
     anime_close(Yo, Co, tmp, W, H, 3);
     anime_close(Ya, Ca, tmp, W, H, 3);
@@ -1338,7 +1353,7 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
         /* (Rev29) a speck of 1-2 points is kept as a dot (drawn round and clean: as a file's square it was a blurred block
            close up; not 2 x 2 and more: a small pupil would shrink to a dot) */
         if (cnt <= 2 && mx <= 1.5f) continue;
-        if (mx > 3.0f || (float)ridge < 2.5f * mx || cnt < 3) { for (j = 0; j < tail; j++) mask[q[j]] = 2; } /* (2: left alone) */
+        if (mx > (hair ? 5.0f : 3.0f) || (float)ridge < 2.5f * mx || cnt < 3) { for (j = 0; j < tail; j++) mask[q[j]] = 2; } /* (2: left alone) */
     }
     /* the line's darkness at each point, 0..1 (its middle 1): from the lit block where the file has it, else the original */
     for (i = 0; i < N; i++) {
