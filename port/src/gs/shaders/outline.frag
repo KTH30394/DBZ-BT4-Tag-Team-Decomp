@@ -78,6 +78,11 @@ void main() {
                 }
             }
             float s = 2.5 - 5.0 * (other / 25.0);
+            if (edge) {
+                // a pixel of the figure with a smaller one beside it is on the line, whatever the 5 x 5 says: at the tip of a
+                // lock (thin, mostly outside) the share put it outside and the hair's colour was left there as a dot
+                s = clamp(s, min(0.5, hh), max(0.5, hh));
+            }
             cov = max(cov, 1.0 - smoothstep(hh - 0.5, hh + 0.5, abs(s - hh)));
         }
         if (hi > here) {
