@@ -4416,6 +4416,7 @@ static struct {
     int forms;
     int row; /* the fighter's row of the alpha table (Tex.arow) */
     int sampler;
+    float tsize; /* (tenk8) the layer 0 texture's size, sqrt(w * h) */
 } sAnimeStrip;
 static uint32_t sStripPack; /* (BT3_ANIME_LOG) the texture of the last strip's layer 0: Tex.packName */
 static const float *sHiddenStrip; /* the strip whose layers are not drawn (anime_hide.txt), or NULL */
@@ -4585,6 +4586,7 @@ static float anime_density(int entry, const float *vertices, uint32_t count) {
    cap known (the outline as it was). Gathered from the anime pass's strips (the nearest of them: the largest), handed to
    the outline drawn after them (GsDraw_OutlineCaps). */
 static float sOutlineCapAcc[16], sOutlineCapShown[16];
+static float sOutlinePptAcc, sOutlinePptShown; /* (tenk8) the nearest piece's pixels per texel */
 static float anime_lines_width(void);
 void GsDraw_OutlineCaps(float caps[16]) {
     memcpy(caps, sOutlineCapShown, sizeof(sOutlineCapShown));
@@ -4597,13 +4599,13 @@ void GsDraw_OutlineCaps(float caps[16]) {
         /* (tenk6) close up the outline grows as the lines inside do: the nearest fighter's face-line width on the screen
            (sOutlineCapShown: cap * ppu / the outline's width, gathered from the anime pass) against the lines' width,
            1..kAll times */
-        float od, ow, best = 0.0f, f;
-        int r;
-        GsDraw_OutlineLook(&od, &ow);
-        for (r = 0; r < 16; r++) if (sOutlineCapShown[r] > best) best = sOutlineCapShown[r];
-        f = anime_lines_width() > 0.0f ? best * ow / anime_lines_width() : 1.0f;
-        f = f < 1.0f ? 1.0f : f > anime_lines_near(0) ? anime_lines_near(0) : f;
-        caps[0] *= f;
+        /* (tenk8, 14-nov-2026) the outline and the lines between locks by the SAME ramp as the lines inside (gs.frag
+           nearK: smoothstep(1.5, 6, pixels per texel), 1 -> kAll), not by the face lines' width (it reached twice
+           sooner, thick hair outlines: the user, "el grosor del pelo ... los contornos del modelo y entre mechones") */
+        float x = (sOutlinePptShown - 1.5f) / 4.5f, k = anime_lines_near(0), f;
+        x = x < 0.0f ? 0.0f : x > 1.0f ? 1.0f : x;
+        f = 1.0f + (k - 1.0f) * x * x * (3.0f - 2.0f * x);
+        caps[0] *= f < 1.0f ? 1.0f : f;
     }
 }
 /* GS pixels (down the screen) one unit of the model is at the middle of this strip: vu0.vert's screen matrix (VU 14..17)
@@ -4881,6 +4883,8 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
         sAnimeStrip.count = count;
         sAnimeStrip.forms = sLast->animeCount;
         sAnimeStrip.row = sLast->arow;
+        /* (from TEX0: TW bits 26..29, TH bits 30..33, as 2^n) */
+        sAnimeStrip.tsize = sqrtf((float)(1u << ((sLast->tex0 >> 26) & 15)) * (float)(1u << ((sLast->tex0 >> 30) & 15)));
         for (f = 0; f < sLast->animeCount; f++) {
             sAnimeStrip.anime[f] = sLast->anime[f];
             sAnimeStrip.cut[f] = sLast->animeCut[f];
@@ -5325,6 +5329,12 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
                 GsDraw_OutlineLook(&od, &ow);
                 share = ppu > 0.0f ? cap * ppu / ow : 0.0f;
                 if (share > sOutlineCapAcc[sAnimeStrip.row]) sOutlineCapAcc[sAnimeStrip.row] = share;
+                /* (tenk8) pixels of the picture one texel of this piece is (gs.frag's 1 / tpx): the outline grows by the
+                   same distance ramp as the lines inside */
+                if (ppu > 0.0f && dens > 0.0f && sAnimeStrip.tsize > 0.0f) {
+                    float ppt = ppu * (float)SCALE / (dens * sAnimeStrip.tsize);
+                    if (ppt > sOutlinePptAcc) sOutlinePptAcc = ppt;
+                }
             }
             if (getenv("BT3_ANIME_LOG") != NULL) {
                 /* (once a texture: its density and the cap in its texels) */
@@ -5645,6 +5655,8 @@ void GsGpu_Native(int effect) {
     /* (Rev24) the fighters drawn before this outline: its cap for each (GsDraw_OutlineCaps) */
     memcpy(sOutlineCapShown, sOutlineCapAcc, sizeof(sOutlineCapShown));
     memset(sOutlineCapAcc, 0, sizeof(sOutlineCapAcc));
+    sOutlinePptShown = sOutlinePptAcc;
+    sOutlinePptAcc = 0.0f;
     if (getenv("BT3_ANIME_LOG") != NULL) {
         static unsigned capFrame;
         if (gGsFrame >= capFrame + 600) {
