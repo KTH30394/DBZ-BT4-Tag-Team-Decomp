@@ -233,6 +233,20 @@ void main() {
             }
         }
 #endif
+#ifndef NO_LINES // (Shader Model 3 has no texelFetch)
+        if (p.rect.w < -0.5 && p.rect.z < 0.5) {
+            // (tenk4, anime_brillo.txt) the gloss's reflection map in grey: dark, middle and light colour by its grey in this
+            // pixel (thresholds 16 and 96 of 255), the edges smooth over a pixel; the colours: the next block's first texels
+            ivec2 tsz2 = textureSize(tex, 0);
+            int bh2 = tsz2.y / int(tot + 0.5);
+            vec3 cD = texelFetch(tex, ivec2(0, bh2), 0).rgb, cM = texelFetch(tex, ivec2(1, bh2), 0).rgb, cL = texelFetch(tex, ivec2(2, bh2), 0).rgb;
+            float g = dot(t.rgb, vec3(0.299, 0.587, 0.114));
+            float aa = max(fwidth(g), 0.004);
+            float m1 = smoothstep(16.0 / 255.0 - aa, 16.0 / 255.0 + aa, g), m2 = smoothstep(96.0 / 255.0 - aa, 96.0 / 255.0 + aa, g);
+            t.rgb = mix(mix(cD, cM, m1), cL, m2);
+            t.a = 1.0;
+        }
+#endif
         if (t.a < 0.5) discard; // (the game's own shading kept there)
         // The game outlines a model by drawing it a second time inside out, behind it: those triangles face the other
         // way on the screen, and they are the line round every lock of hair (the outline pass only draws lines between

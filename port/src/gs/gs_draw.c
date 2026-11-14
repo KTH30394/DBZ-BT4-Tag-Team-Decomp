@@ -5237,6 +5237,10 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
         if (layer == 5 && TexPack_AnimeBrillo(sAnimeStrip.entry[form])) {
             /* (tenk4, anime_brillo.txt) the gloss's own drawing in the folder's colours (vu0.vert layer 8: target.z) */
             au.target[2] = 1.0f;
+            /* (gs.frag mode 4, rect.w = -1) the tone block holds the map in grey and the next block's first three texels the
+               dark, middle and light colours: each pixel of the picture gets its colour from the grey, the edges smooth
+               (a map drawn in the colours in the file's texels came out in squares close up) */
+            a.rect[3] = -1.0f;
         }
         if (layer == 1 && viewSide == 0.0f) {
             /* (the light a program 1 piece of this folder listed in anime_luz.txt is split by) */
