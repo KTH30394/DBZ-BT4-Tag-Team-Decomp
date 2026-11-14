@@ -155,8 +155,13 @@ void main() {
             // cuando te acercas"): its own width in the file, never thinner than the line far away nor wider than kAll
             // times it; the marked ones (Majin Vegeta's M) up to kThick. orig.w = 100 * kAll + kThick (gs_draw.c,
             // textures/anime_lineas_cerca.txt: 2 and 4)
-            float kAll = p.rect.z > 0.5 ? 2.0 : max(floor(p.orig.w / 100.0), 1.0);
-            float kThick = p.rect.z > 0.5 ? 2.0 : max(p.orig.w - 100.0 * floor(p.orig.w / 100.0), 1.0);
+            // (tenk9) orig.w = (A2 * 100 + B2) * 100 + kAll * 10 + kThick; A2, B2: where the lines start growing and where
+            // they are kAll times, in half pixels of the picture per texel (anime_lineas_cerca.txt "2 4 3 10")
+            float ow4 = p.orig.w;
+            float kAll = p.rect.z > 0.5 ? 2.0 : max(mod(floor(ow4 / 10.0), 10.0), 1.0);
+            float kThick = p.rect.z > 0.5 ? 2.0 : max(mod(ow4, 10.0), 1.0);
+            float rampA = floor(ow4 / 10000.0) * 0.5, rampB = mod(floor(ow4 / 100.0), 100.0) * 0.5;
+            if (p.rect.z > 0.5 || rampB <= rampA) { rampA = 3.0; rampB = 10.0; }
             // (Rev31) soft half a pixel either side of the width (anime_lineas_grosor.txt, extra.w): Rev30's edge, black to a
             // quarter pixel short and soft for 3/4 beyond, with the outline's width, came out about 3 pixels of the screen
             // (tenk8, 14-nov-2026) every line as wide as every other at the same distance (the user: "de lejos las siento mas
@@ -164,8 +169,10 @@ void main() {
             // Super Saiyan hair reached twice the width half way): the width only from how close the camera is, the outline's far
             // away, growing smoothly to kAll times it close up (a texel over 1.5 pixels of the picture or less: none; over 6: all
             // of it), an intermediate width between (the user's idea)
-            float nearK = smoothstep(1.5, 6.0, 1.0 / max(tpx, 1e-3));
-            float hhN = hhW * mix(1.0, kAll, nearK);
+            // (tenk9, the user: "cuando alcanzan su limite de distancia, en el que la linea no deberia verse tan fina ... con
+            // doble grosor es lo maximo"): the line keeps its width on the screen until a texel is rampA pixels of the picture;
+            // nearer, it grows as the model does (as if painted on it), to kAll times at most
+            float hhN = hhW * clamp((1.0 / max(tpx, 1e-3)) / max(rampA, 0.5), 1.0, kAll);
             float a0 = 0.5 * tpx, a1 = 0.5 * tpx, ink = 0.0, bestD = 1e6;
             vec2 bestCp = pt;
             if (tpx >= 1.0) {

@@ -1228,22 +1228,54 @@ static float anime_lines_width(void) {
 }
 /* (tenk6, 14-nov-2026) close up every line grows with the model up to [0] times its width far away, the marked ones
    (anime_lineas_gruesas.txt) up to [1]; the outline and seams as the lines: textures/anime_lineas_cerca.txt "2 4" */
+/* (tenk9, 14-nov-2026) and [2], [3]: the pixels of the picture one texel is where the lines start growing and where they
+   are kAll times (the user, tenk8: "de lejos se ve como una puta mierda ... deberian verse mas gordas mucho mas cerca"):
+   "2 4 3 10"; 0.5 steps, 0..49.5 */
 static float anime_lines_near(int which) {
-    static float k[2] = {-1.0f, 4.0f};
+    static float k[4] = {-1.0f, 4.0f, 3.0f, 10.0f};
     if (k[0] < 0.0f) {
         FILE *f = fopen("textures/anime_lineas_cerca.txt", "r");
-        float x = 2.0f, y = 4.0f;
+        float x = 2.0f, y = 4.0f, a = 3.0f, b = 10.0f;
+        int got = 0;
         k[0] = 2.0f;
         if (f != NULL) {
-            if (fscanf(f, "%f %f", &x, &y) == 2 && x >= 1.0f && x <= 9.0f && y >= 1.0f && y <= 9.0f) {
+            got = fscanf(f, "%f %f %f %f", &x, &y, &a, &b);
+            if (got >= 2 && x >= 1.0f && x <= 9.0f && y >= 1.0f && y <= 9.0f) {
                 k[0] = x;
                 k[1] = y;
             }
+            if (got == 4 && a >= 0.0f && b > a && b <= 49.5f) {
+                k[2] = a;
+                k[3] = b;
+            }
             fclose(f);
         }
-        fprintf(stderr, "anime: lineas de cerca hasta %.1f veces, las marcadas hasta %.1f (anime_lineas_cerca.txt)\n", k[0], k[1]);
+        fprintf(stderr, "anime: lineas de cerca hasta %.1f veces, las marcadas hasta %.1f; crecen de %.1f a %.1f pixeles por texel (anime_lineas_cerca.txt)\n",
+                k[0], k[1], k[2], k[3]);
     }
-    return k[which != 0];
+    return k[which < 0 ? 0 : which > 3 ? 3 : which];
+}
+/* (tenk9) 1 = a texture whose nets of lines are left as anime_lines_make found them before (textures/anime_lineas_redes_no.txt:
+   the first part of its name, one a line) */
+static int anime_redes_no(uint64_t h) {
+    static uint64_t list[256];
+    static int n = -1;
+    int k;
+    if (n < 0) {
+        FILE *f = fopen("textures/anime_lineas_redes_no.txt", "r");
+        char line[128];
+        n = 0;
+        if (f != NULL) {
+            while (n < 256 && fgets(line, sizeof(line), f) != NULL) {
+                uint64_t v = anime_name_hash(line);
+                if (line[0] != '#' && v != 0) list[n++] = v;
+            }
+            fclose(f);
+        }
+        fprintf(stderr, "anime: %d texturas sin el arreglo de redes de lineas (anime_lineas_redes_no.txt)\n", n);
+    }
+    for (k = 0; k < n; k++) if (list[k] == h) return 1;
+    return 0;
 }
 static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint32_t w, uint32_t h, int n, int face) {
     int W = (int)w, H = (int)h, N = W * H, i, x, y, k, t, changed, any = 0;
@@ -1279,6 +1311,10 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
     uint8_t *addf = calloc((size_t)N, 1); /* (Rev26) 1: a skeleton point of a line added between two colours */
     float *aox = malloc(sizeof(float) * N * 2), *aoy = aox ? aox + N : NULL;
     int j0;
+    /* (tenk9) the thick part of a net of lines and the pieces of it left (below) */
+    uint8_t *sBlob = calloc((size_t)N * 2, 1), *sSub = sBlob ? sBlob + N : NULL;
+    int *sQ2 = malloc(sizeof(int) * (size_t)N);
+    if (sQ2 == NULL) { free(sBlob); sBlob = NULL; sSub = NULL; }
     static const int DX[8] = {1, -1, 0, 0, 1, 1, -1, -1}, DY[8] = {0, 0, 1, -1, 1, -1, 1, -1};
     if (Yo == NULL || dt == NULL || lab == NULL || mask == NULL || ex == NULL || addf == NULL || aox == NULL) goto done;
     /* (tenk8, 14-nov-2026) a texture of Super Saiyan hair (most of it golden): its strokes inside the locks are drawn thick
@@ -1353,7 +1389,46 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
         /* (Rev29) a speck of 1-2 points is kept as a dot (drawn round and clean: as a file's square it was a blurred block
            close up; not 2 x 2 and more: a small pupil would shrink to a dot) */
         if (cnt <= 2 && mx <= 1.5f) continue;
-        if (mx > (hair ? 5.0f : 3.0f) || (float)ridge < 2.5f * mx || cnt < 3) { for (j = 0; j < tail; j++) mask[q[j]] = 2; } /* (2: left alone) */
+        if (mx > (hair ? 5.0f : 3.0f) || (float)ridge < 2.5f * mx || cnt < 3) {
+            for (j = 0; j < tail; j++) mask[q[j]] = 2; /* (2: left alone) */
+            /* (tenk9, 14-nov-2026) one thick spot left the whole net of lines joined to it as the file has it, thick (the
+               collar of Gohan SSJ2, Goku SSJ's belt line, Cell's scribbles): the thick part (discs round the points over 2.5
+               texels from the edge) stays, and each piece of the net left, if thin (4 texels or less), long (30 points
+               or more) and a stroke (its ridge 0.4 of it), is a line again. Checked on every texture (Herramientas\
+               rayas38.cs): 24 change; Kid Buu's M, Vegeta's crack and the band of Goku's belt do not. Not on a face nor
+               a texture in textures/anime_lineas_redes_no.txt. */
+            if (!face && mx > 2.5f && sBlob != NULL && !anime_redes_no(sLinesHash)) {
+                int jb, s2;
+                for (jb = 0; jb < tail; jb++) {
+                    int c = q[jb], R, cx, cy, xx, yy;
+                    float rr;
+                    if (dt[c] <= 2.5f) continue;
+                    R = (int)ceilf(dt[c] + 0.5f); cx = c % W; cy = c / W; rr = (dt[c] + 0.5f) * (dt[c] + 0.5f);
+                    for (yy = cy - R; yy <= cy + R; yy++) for (xx = cx - R; xx <= cx + R; xx++) {
+                        int jj;
+                        if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+                        jj = yy * W + xx;
+                        if (lab[jj] == i && (float)((xx - cx) * (xx - cx) + (yy - cy) * (yy - cy)) <= rr) sBlob[jj] = 1;
+                    }
+                }
+                for (jb = 0; jb < tail; jb++) {
+                    int s0 = q[jb], h2 = 0, t2 = 0, c2n = 0, rg2 = 0;
+                    float m2 = 0.0f;
+                    if (sBlob[s0] != 0 || sSub[s0] != 0) continue;
+                    sQ2[t2++] = s0; sSub[s0] = 1;
+                    while (h2 < t2) {
+                        int c = sQ2[h2++], cx = c % W, cy = c / W, top = 1;
+                        c2n++; m2 = fmaxf(m2, dt[c]);
+                        for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k], jj; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; jj = yy * W + xx; if (mask[jj] && dt[jj] > dt[c] + 0.01f) top = 0; }
+                        rg2 += top;
+                        for (k = 0; k < 8; k++) { int xx = cx + DX[k], yy = cy + DY[k], jj; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue; jj = yy * W + xx; if (lab[jj] == i && !sBlob[jj] && !sSub[jj]) { sSub[jj] = 1; sQ2[t2++] = jj; } }
+                    }
+                    if (m2 <= 2.0f && (float)rg2 >= 2.5f * m2 && c2n >= 30 && (float)rg2 >= 0.4f * (float)c2n) {
+                        for (s2 = 0; s2 < t2; s2++) mask[sQ2[s2]] = 1;
+                    }
+                }
+            }
+        }
     }
     /* the line's darkness at each point, 0..1 (its middle 1): from the lit block where the file has it, else the original */
     for (i = 0; i < N; i++) {
@@ -1751,6 +1826,7 @@ static uint8_t *anime_lines_make(const uint8_t *tones, const uint8_t *orig, uint
         } }
 done:
     free(Yo); free(dt); free(lab); free(mask); free(sk); free(inp); free(ex); free(addf); free(aox); free(tn);
+    free(sBlob); free(sQ2);
     return out;
 }
 /* (made once a file: the same file comes again with every palette, every flash) */
@@ -4602,10 +4678,9 @@ void GsDraw_OutlineCaps(float caps[16]) {
         /* (tenk8, 14-nov-2026) the outline and the lines between locks by the SAME ramp as the lines inside (gs.frag
            nearK: smoothstep(1.5, 6, pixels per texel), 1 -> kAll), not by the face lines' width (it reached twice
            sooner, thick hair outlines: the user, "el grosor del pelo ... los contornos del modelo y entre mechones") */
-        float x = (sOutlinePptShown - 1.5f) / 4.5f, k = anime_lines_near(0), f;
-        x = x < 0.0f ? 0.0f : x > 1.0f ? 1.0f : x;
-        f = 1.0f + (k - 1.0f) * x * x * (3.0f - 2.0f * x);
-        caps[0] *= f < 1.0f ? 1.0f : f;
+        /* (tenk9) as gs.frag: its width on the screen until a face texel is A pixels, then growing with the model, kAll at most */
+        float k = anime_lines_near(0), a = anime_lines_near(2), f = sOutlinePptShown / (a > 0.5f ? a : 0.5f);
+        caps[0] *= f < 1.0f ? 1.0f : f > k ? k : f;
     }
 }
 /* GS pixels (down the screen) one unit of the model is at the middle of this strip: vu0.vert's screen matrix (VU 14..17)
@@ -5320,7 +5395,15 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
                     /* (tenk6, 14-nov-2026) every line grows close up to kAll times (its width in the file, as the marked ones
                        did), the marked ones to kThick: textures/anime_lineas_cerca.txt "2 4"; orig.w = 100 * kAll + kThick */
                     if (sAnimeStrip.lines[form]) {
-                        a.orig[3] = 100.0f * floorf(anime_lines_near(0)) + (a.orig[3] > 1.0f ? anime_lines_near(1) : 1.0f);
+                        /* (tenk9) orig.w = (A2 * 100 + B2) * 100 + kAll * 10 + kThick: A2, B2 the ramp's ends in half pixels
+                           per texel (gs.frag) */
+                        int kA = (int)anime_lines_near(0), kT = a.orig[3] > 1.0f ? (int)anime_lines_near(1) : 1;
+                        int rA = (int)(anime_lines_near(2) * 2.0f + 0.5f), rB = (int)(anime_lines_near(3) * 2.0f + 0.5f);
+                        kA = kA < 1 ? 1 : kA > 9 ? 9 : kA;
+                        kT = kT < 1 ? 1 : kT > 9 ? 9 : kT;
+                        rA = rA > 99 ? 99 : rA;
+                        rB = rB > 99 ? 99 : rB;
+                        a.orig[3] = (float)((rA * 100 + rB) * 100 + kA * 10 + kT);
                     }
                 }
             }
@@ -5331,7 +5414,9 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
                 if (share > sOutlineCapAcc[sAnimeStrip.row]) sOutlineCapAcc[sAnimeStrip.row] = share;
                 /* (tenk8) pixels of the picture one texel of this piece is (gs.frag's 1 / tpx): the outline grows by the
                    same distance ramp as the lines inside */
-                if (ppu > 0.0f && dens > 0.0f && sAnimeStrip.tsize > 0.0f) {
+                /* (tenk9) only the face's pieces: a stretched piece (a texture of 0.04 uv a unit) made the nearest look
+                   ten times nearer and the outline was twice as wide far away too (the user: "lineas muy negras") */
+                if (ppu > 0.0f && dens > 0.0f && sAnimeStrip.tsize > 0.0f && anime_lines_face(sAnimeStrip.entry[form])) {
                     float ppt = ppu * (float)SCALE / (dens * sAnimeStrip.tsize);
                     if (ppt > sOutlinePptAcc) sOutlinePptAcc = ppt;
                 }
@@ -5664,7 +5749,7 @@ void GsGpu_Native(int effect) {
             capFrame = gGsFrame;
             fprintf(stderr, "anime: contorno tope (parte de su ancho) por fila:");
             for (r = 0; r < 16; r++) if (sOutlineCapShown[r] > 0.0f) fprintf(stderr, " fila %d %.2f", r, sOutlineCapShown[r]);
-            fprintf(stderr, "\n");
+            fprintf(stderr, "; cara mas cercana %.2f pixeles por texel\n", sOutlinePptShown);
         }
     }
     memset(&d, 0, sizeof(d));
