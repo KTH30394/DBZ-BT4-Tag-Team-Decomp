@@ -6,6 +6,10 @@
 #include "sys/fade.h"
 #include "sys/file.h"
 #include "sys/heap.h"
+#include "sys/pad.h"
+#ifdef PORT
+#include <stdio.h>
+#endif
 
 /*
  * ChrView, 0x25D468..0x25DE68: the character model viewer of the menus. It runs the battle's object, stage and
@@ -370,6 +374,56 @@ s32 ChrView_Show(s32 chara, s32 costume, s32 damaged) {
 void ChrView_Update(void) {
     View *view;
 
+#ifdef PORT
+    {
+        /* PC build (tenk4, 14-nov-2026; the user's request): in the museum's model viewer R2 brings the camera closer and
+           L2 takes it away (as a fight's camera does: the model is not scaled), far past the table's range, and the d-pad
+           moves the model on the screen (the point the camera looks at), the angle and distance kept. ChrView_SetupCamera
+           puts all back for each model. textures/museo_camara.txt: zoom speed, move speed, sense across, sense up/down
+           (1 or -1), so a sense the other way round needs no build. Camera (orbit_cam.c): eye = target - d * dist,
+           d = (cos p sin y, -sin p, cos p cos y); y grows downwards, so the screen's right is (cos y, 0, -sin y). */
+        static f32 zoomSpeed = -1.0f, moveSpeed = 1.0f, senseX = 1.0f, senseY = 1.0f;
+        Pad *p = &gPad[0];
+        Vec4 tg, an;
+        f32 dist, dmin, dmax, step, rx, rz;
+        if (zoomSpeed < 0.0f) {
+            FILE *f = fopen("textures/museo_camara.txt", "r");
+            zoomSpeed = 1.0f;
+            if (f != NULL) {
+                float a = 1.0f, b = 1.0f, c = 1.0f, e = 1.0f;
+                if (fscanf(f, "%f %f %f %f", &a, &b, &c, &e) >= 1) {
+                    zoomSpeed = a > 0.0f ? a : 1.0f;
+                    moveSpeed = b > 0.0f ? b : 1.0f;
+                    senseX = c < 0.0f ? -1.0f : 1.0f;
+                    senseY = e < 0.0f ? -1.0f : 1.0f;
+                }
+                fclose(f);
+            }
+        }
+        dist = OrbitCam_GetDist();
+        if (p->gameHeld & (PADG_R2 | PADG_L2)) {
+            dist *= (p->gameHeld & PADG_R2) ? 1.0f - 0.02f * zoomSpeed : 1.0f + 0.02f * zoomSpeed;
+            dist = dist < 0.3f ? 0.3f : dist > 250.0f ? 250.0f : dist;
+            OrbitCam_GetDistRange(&dmin, &dmax);
+            OrbitCam_SetDistRange(dmin < dist ? dmin : dist, dmax > dist ? dmax : dist);
+            OrbitCam_SetDist(dist);
+        }
+        if (p->gameHeld & (PADG_UP | PADG_DOWN | PADG_LEFT | PADG_RIGHT)) {
+            OrbitCam_GetTarget(&tg);
+            OrbitCam_GetAngles(&an);
+            step = dist * 0.012f * moveSpeed;
+            rx = cosf(an.y);
+            rz = -sinf(an.y);
+            /* the model to the right on the screen = the camera's point to the left */
+            if (p->gameHeld & PADG_RIGHT) { tg.x -= rx * step * senseX; tg.z -= rz * step * senseX; }
+            if (p->gameHeld & PADG_LEFT)  { tg.x += rx * step * senseX; tg.z += rz * step * senseX; }
+            /* the model up on the screen = the camera's point down (y grows downwards) */
+            if (p->gameHeld & PADG_UP)    { tg.y += step * senseY; }
+            if (p->gameHeld & PADG_DOWN)  { tg.y -= step * senseY; }
+            OrbitCam_SetTarget(tg.x, tg.y, tg.z);
+        }
+    }
+#endif
     OrbitCam_Update(1);
     Dbg_ProfMark(gBattleProf);
     if (gChrView->stageOn != 0) {
