@@ -56,6 +56,11 @@ int TexPack_AnimeFolderIsForm(int folder);
 /* anime_models.txt in a folder: the file ids (decimal, one a line) of the fighter models its colours are for. Without
    it, any fighter's textures with files there take them, as before. */
 int TexPack_AnimeFolderAllows(int folder, int model);
+/* (tenk10) 1 = the folder has an anime_models.txt (gs_draw.c: then only for a fighter whose model is known and listed) */
+int TexPack_AnimeFolderHasModels(int folder);
+/* (tenk10) "anime_normal.txt" in its folder (first number: percent lit, then hashes left out): the "efecto normal",
+   every piece cut where that share of its points is lit by the real light, each frame (gs_draw.c). 0 = none. */
+int TexPack_AnimeNormal(int id);
 int TexPack_AnimeAnyModels(void);
 int TexPack_AnimeIsMarker(int id);
 /* One of the textures listed in its folder's "anime_hair.txt" (hashes, one a line): hair, drawn with a dark line along

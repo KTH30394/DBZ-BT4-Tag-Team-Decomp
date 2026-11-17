@@ -107,6 +107,9 @@ typedef struct AnimeFolder {
     uint64_t *capTex;  /* anime_capas.txt: textures of 4 or 5 tones (TexPack_AnimeCapas) and the widths of their middle */
     int (*capW)[3];    /* tones, in percent of the ramp, from the lit side (2 for 4 tones, 3 for 5) */
     int *capN, capCount;
+    int normal;        /* (tenk10) anime_normal.txt: the "efecto normal", percent of each piece lit (1..99), 0 = none */
+    uint64_t *normalOff; /* and the texture hashes on its next lines: pieces left as they were (TexPack_AnimeNormal) */
+    int normalOffCount;
 } AnimeFolder;
 
 /* A file of texture hashes, one a line (hexadecimal; anything after it ignored). 1 = it is there. */
@@ -277,6 +280,34 @@ static int folder_of(const char *dir) {
     f = fopen(path, "r");
     if (f != NULL) {
         a->brillo = 1;
+        fclose(f);
+    }
+    snprintf(path, sizeof(path), "%sanime_normal.txt", dir);
+    f = fopen(path, "r");
+    if (f != NULL) {
+        /* (tenk10, 17-nov-2026) the "efecto normal": its first number is how much of every piece is lit (percent), by the
+           real light, whatever the stage; each line after it a texture hash left as it was. Lines starting '#' ignored. */
+        char line[256];
+        int first = 1;
+        while (fgets(line, sizeof(line), f) != NULL) {
+            char *end;
+            if (line[0] == '#') {
+                continue;
+            }
+            if (first) {
+                long v = strtol(line, &end, 10);
+                if (end != line) {
+                    a->normal = v < 1 ? 1 : v > 99 ? 99 : (int)v;
+                    first = 0;
+                }
+            } else {
+                unsigned long long v = strtoull(line, &end, 16);
+                if (end != line) {
+                    a->normalOff = realloc(a->normalOff, (size_t)(a->normalOffCount + 1) * sizeof(uint64_t));
+                    a->normalOff[a->normalOffCount++] = (uint64_t)v;
+                }
+            }
+        }
         fclose(f);
     }
     return sFolderCount++;
@@ -490,7 +521,7 @@ void TexPack_Init(void) {
         sBucket[h] = i + 1;
     }
     fprintf(stderr, "bt3: texture pack: %u replacement textures in %s (%u more with a name already seen)\n", sCount - dup, root, dup);
-    fprintf(stderr, "bt4 anime: build tenk9 (14-nov-2026, rev d, tercer ejecutable tras bloqueos de Smart App Control; lineas y contorno con su grosor normal hasta el limite de cerca (anime_lineas_cerca.txt) y luego crecen con el modelo hasta 2x; redes de lineas unidas a una mancha gorda vuelven a ser lineas; tenk8: rayas gruesas del pelo SSJ como lineas; caras en alta resolucion: archivos de cara 2, 4 u 8 veces mas grandes, pintados tal cual; de cerca todas las lineas y el contorno hasta 2x, la M hasta 4x (anime_lineas_cerca.txt); lineas suaves por el codigo, caras como su archivo; brillo de Freezer con su dibujo; museo: R2/L2 zoom y cruceta para mover el modelo; tenk1 + contorno y uniones entre partes con el grosor y borde suave de las lineas de dentro; capas metalicas de Cell, Cell 2a y pantalon de Vegeta SSJ4 ocultas por nombre; texturas sin fila de luchador con sus colores anime: brillo de Freezer con sus 3 colores)\n");
+    fprintf(stderr, "bt4 anime: build tenk10 (17-nov-2026; efecto normal: anime_normal.txt, cada pieza con el % de claro pedido por la luz real en cualquier escenario; carpetas con anime_models solo para sus modelos, nunca para un modelo aun no sabido; tenk9: lineas y contorno con su grosor normal hasta el limite de cerca (anime_lineas_cerca.txt) y luego crecen con el modelo hasta 2x; redes de lineas unidas a una mancha gorda vuelven a ser lineas; tenk8: rayas gruesas del pelo SSJ como lineas; caras en alta resolucion: archivos de cara 2, 4 u 8 veces mas grandes, pintados tal cual; de cerca todas las lineas y el contorno hasta 2x, la M hasta 4x (anime_lineas_cerca.txt); lineas suaves por el codigo, caras como su archivo; brillo de Freezer con su dibujo; museo: R2/L2 zoom y cruceta para mover el modelo; tenk1 + contorno y uniones entre partes con el grosor y borde suave de las lineas de dentro; capas metalicas de Cell, Cell 2a y pantalon de Vegeta SSJ4 ocultas por nombre; texturas sin fila de luchador con sus colores anime: brillo de Freezer con sus 3 colores)\n");
 }
 
 int TexPack_Count(void) {
@@ -828,6 +859,25 @@ int TexPack_AnimeFolderAllows(int folder, int model) {
         }
     }
     return 0;
+}
+
+/* (tenk10) 1 = the folder has an anime_models.txt: its colours only for the models it lists, never for one not known */
+int TexPack_AnimeFolderHasModels(int folder) {
+    return folder >= 0 && folder < sFolderCount && sFolders[folder].hasModels;
+}
+
+/* (tenk10) the "efecto normal" of this texture's folder (anime_normal.txt): percent of the piece lit, 0 = none */
+int TexPack_AnimeNormal(int id) {
+    int folder = TexPack_AnimeFolder(id), k;
+    if (folder < 0 || sFolders[folder].normal <= 0) {
+        return 0;
+    }
+    for (k = 0; k < sFolders[folder].normalOffCount; k++) {
+        if (sFolders[folder].normalOff[k] == sEntries[id].tex) {
+            return 0;
+        }
+    }
+    return sFolders[folder].normal;
 }
 
 /* 1 = some folder has an anime_models.txt (the decoded textures then depend on which models the fighters have) */

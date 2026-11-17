@@ -2206,6 +2206,18 @@ static int sFighterRowNow = -1;
 static int anime_folder_ok(int folder, int row) {
     return TexPack_AnimeFolderAllows(folder, anime_row_model(row));
 }
+/* (tenk10, 17-nov-2026) the same, but a folder with an anime_models.txt never for a fighter whose model is not known
+   yet: the texture is made again once it is (anime_tex_current, its row then has a model), so a folder of one fighter
+   never paints another that shares the texture (the user: a character changed must share NOTHING unless he asks;
+   before, while the model was not known, any folder with the texture would do: Goku SSJ's into SSJ2). Only for a
+   texture that is made again that way (8 bits or fewer, its own size). */
+static int anime_folder_ok_strict(int folder, int row) {
+    int model = anime_row_model(row);
+    if (row >= 0 && model < 0 && TexPack_AnimeFolderHasModels(folder)) { /* (a texture without a row: as before) */
+        return 0;
+    }
+    return TexPack_AnimeFolderAllows(folder, model);
+}
 /* (tenk2) a texture whose pixels carry no row: a folder of ANY fighter on the screen (the row of the strip drawn before it
    is not his: Cell's layer came after the other fighter's strips). Such names are each one fighter's own. */
 static int anime_folder_ok_any(int folder) {
@@ -2435,7 +2447,7 @@ static int anime_derive_try(uint64_t texHash, const uint32_t *px, uint32_t w, ui
         }
         for (rr = 0; rr < 8 && i == w * h; rr++) {
             int folder = sAnimeRecent[rr].folder - 1, ids[256], ne, e;
-            if (folder < 0 || sAnimeRecent[rr].frame + 10 < gGsFrame || !anime_form_usable(folder) || !anime_folder_ok(folder, sDeriveRow)) {
+            if (folder < 0 || sAnimeRecent[rr].frame + 10 < gGsFrame || !anime_form_usable(folder) || !anime_folder_ok_strict(folder, sDeriveRow)) {
                 continue;
             }
             ne = TexPack_AnimeFolderEntries(folder, ids, 256);
@@ -2610,7 +2622,7 @@ static int anime_derive_try(uint64_t texHash, const uint32_t *px, uint32_t w, ui
     for (r = 0; r < 8; r++) {
         int t, folder = sAnimeRecent[r].folder - 1, q;
         uint32_t hits = 0;
-        if (folder < 0 || sAnimeRecent[r].frame + 10 < gGsFrame || !anime_form_usable(folder) || !anime_folder_ok(folder, sDeriveRow) ||
+        if (folder < 0 || sAnimeRecent[r].frame + 10 < gGsFrame || !anime_form_usable(folder) || !anime_folder_ok_strict(folder, sDeriveRow) ||
             !anime_alpha_same(folder, px, w * h) || (t = anime_table(folder)) < 0) {
             continue;
         }
@@ -3103,6 +3115,7 @@ static GsTex texture_get(int ctx, int menuHd) {
     if (animeFound > 0 && px != NULL && TexPack_AnimeAnyModels()) {
         /* anime_models.txt: only the folders for this fighter's model */
         int row = anime_px_row(px, tw * th), k = 0, anyKnown = 0, r;
+        int strict = bits <= 8 && rw == tw && rh == th; /* (tenk10: made again when its model is known, anime_folder_ok_strict) */
         for (r = 0; r < 64; r++) anyKnown |= sRowModel[r] > 0;
         if (row < 0 && !anyKnown) {
             rowlessFound = animeFound; /* (tenk2: made again once a fighter is known, anime_tex_current) */
@@ -3111,11 +3124,34 @@ static GsTex texture_get(int ctx, int menuHd) {
             int fo = TexPack_AnimeFolder(animeIds[f]);
             /* (tenk2) program 1's textures (the second pass over a part) carry another row in their palette (the other
                fighter's): any fighter on the screen */
-            if (row >= 0 ? (anime_folder_ok(fo, row) || (gVuProgram1 && anime_folder_ok_any(fo))) : anime_folder_ok_any(fo)) {
+            if (row >= 0 ? ((strict ? anime_folder_ok_strict(fo, row) : anime_folder_ok(fo, row)) || (gVuProgram1 && anime_folder_ok_any(fo)))
+                         : anime_folder_ok_any(fo)) {
                 animeIds[k++] = animeIds[f];
             }
         }
         animeFound = k;
+        if (animeFound > 1 && (row < 0 || gVuProgram1)) {
+            /* (tenk10) taken by "any fighter on the screen" and more than one folder left: when some are for the fighter
+               being drawn now (sFighterRowNow) and others only for another fighter, those others go (two fighters on
+               the screen with the same texture each in his own folder: each keeps his). Else as before. */
+            int now = anime_row_model(sFighterRowNow), mine = 0, other = 0;
+            if (now >= 0) {
+                for (f = 0; f < animeFound; f++) {
+                    int fo = TexPack_AnimeFolder(animeIds[f]);
+                    if (!TexPack_AnimeFolderHasModels(fo)) continue;
+                    if (TexPack_AnimeFolderAllows(fo, now)) mine++; else other++;
+                }
+                if (mine > 0 && other > 0) {
+                    for (f = 0, k = 0; f < animeFound; f++) {
+                        int fo = TexPack_AnimeFolder(animeIds[f]);
+                        if (!TexPack_AnimeFolderHasModels(fo) || TexPack_AnimeFolderAllows(fo, now)) {
+                            animeIds[k++] = animeIds[f];
+                        }
+                    }
+                    animeFound = k;
+                }
+            }
+        }
     }
     for (f = 0; f < animeFound && !replaced && !menuText && px != NULL && rw == tw && rh == th; f++) {
         if (sBackend->texSlotsLeft() > 1) {
@@ -4804,6 +4840,70 @@ static int anime_form(void) {
     return any;
 }
 
+/* (tenk10, 17-nov-2026) The "efecto normal" (anime_normal.txt, the user's name): every piece of the model with its two
+   colours split so that the share of it the folder says (50 = half) is lit, by the REAL light of wherever it is, whatever
+   the stage: the light still comes from where it comes, only the edge moves. Each piece (its anime file) gathers where
+   on the ramp its points are this frame (r as vu0.vert layer 7, as the rstat lines in the log have it), and is cut where
+   that share of them falls on the lit side; drawn with the edge of the frame before, half way towards the new one each
+   frame (no shaking). The first frame it is seen: the points of its strips so far. -1 = none yet. */
+#define ANIME_NORMAL_SLOTS 192
+#define ANIME_NORMAL_BINS 256
+static struct { int entry; uint32_t frame; unsigned n, hist[ANIME_NORMAL_BINS]; float edge; int have; } sNormal[ANIME_NORMAL_SLOTS];
+static float anime_normal_quantile(const unsigned *hist, unsigned n, float share) {
+    /* the r below which `share` of the points are, the bin's points taken as spread evenly across it */
+    float want = share * (float)n, acc = 0.0f;
+    int b;
+    for (b = 0; b < ANIME_NORMAL_BINS; b++) {
+        if (hist[b] != 0 && acc + (float)hist[b] >= want) {
+            return ((float)b + (want - acc) / (float)hist[b]) / (float)ANIME_NORMAL_BINS;
+        }
+        acc += (float)hist[b];
+    }
+    return 1.0f;
+}
+static float anime_normal_edge(int entry, int pct, float dir, const float *vertices, uint32_t count, const float *consts) {
+    unsigned s, oldest = 0, n;
+    float lx = consts[40], ly = consts[44], lz = consts[48], lw = consts[52];
+    /* lit where (r - edge) * -dir >= 0: dir -1, r above the edge (the edge where 1 - share of them are below); dir 1, below */
+    float below = dir < 0.0f ? 1.0f - (float)pct / 100.0f : (float)pct / 100.0f;
+    for (s = 0; s < ANIME_NORMAL_SLOTS && sNormal[s].entry != entry + 1; s++) {
+        if (sNormal[s].frame < sNormal[oldest].frame) oldest = s;
+    }
+    if (s == ANIME_NORMAL_SLOTS) { /* (a piece not seen yet: the slot left longest) */
+        s = oldest;
+        memset(&sNormal[s], 0, sizeof(sNormal[s]));
+        sNormal[s].entry = entry + 1;
+        sNormal[s].frame = gGsFrame;
+    }
+    if (sNormal[s].frame != gGsFrame) {
+        if (sNormal[s].n != 0 && gGsFrame - sNormal[s].frame <= 2u) {
+            float target = anime_normal_quantile(sNormal[s].hist, sNormal[s].n, below);
+            sNormal[s].edge = sNormal[s].have ? sNormal[s].edge + (target - sNormal[s].edge) * 0.5f : target;
+            sNormal[s].have = 1;
+        } else {
+            sNormal[s].have = 0; /* (not drawn for a while: from what it is now) */
+        }
+        memset(sNormal[s].hist, 0, sizeof(sNormal[s].hist));
+        sNormal[s].n = 0;
+        sNormal[s].frame = gGsFrame;
+    }
+    for (n = 0; n < count; n++) {
+        const float *nv = &vertices[n * 12 + 4];
+        float wx = consts[0] * nv[0] + consts[4] * nv[1] + consts[8] * nv[2];
+        float wy = consts[1] * nv[0] + consts[5] * nv[1] + consts[9] * nv[2];
+        float wz = consts[2] * nv[0] + consts[6] * nv[1] + consts[10] * nv[2];
+        float r = (lx * wx + ly * wy + lz * wz + lw) * 0.5f + 0.5f;
+        int b = (int)(r * (float)ANIME_NORMAL_BINS);
+        b = b < 0 ? 0 : b >= ANIME_NORMAL_BINS ? ANIME_NORMAL_BINS - 1 : b;
+        sNormal[s].hist[b]++;
+        sNormal[s].n++;
+    }
+    if (sNormal[s].have) {
+        return sNormal[s].edge;
+    }
+    return sNormal[s].n != 0 ? anime_normal_quantile(sNormal[s].hist, sNormal[s].n, below) : -1.0f;
+}
+
 /* Vertex program 0 as a shader: one strip of the fighters' models (see shaders/vu0.vert and gs_vu1.c). The strip
    becomes a triangle list of the program's own 48-byte vertices; the constants go into a uniform block. */
 void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, const float *consts) {
@@ -5122,6 +5222,28 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
     if ((layer == 1 || layer == 5 || layer == 3) && sAnimeStrip.vertices == vertices && sAnimeStrip.count == count &&
         sAnimeStrip.forms > 0) {
         form = anime_form();
+    }
+    if (layer == 1 && form >= 0 && rampDir != 0.0f && viewSide == 0.0f && !luz) {
+        /* (tenk10) the "efecto normal" (anime_normal.txt): this piece cut where that share of it is lit (anime_normal_edge) */
+        int pct = TexPack_AnimeNormal(sAnimeStrip.entry[form]);
+        if (pct > 0) {
+            float e = anime_normal_edge(sAnimeStrip.entry[form], pct, rampDir, vertices, count, consts);
+            if (e >= 0.0f) {
+                rampEdge = e - rampDir * sAnimeStrip.cut[form];
+            }
+            if (getenv("BT3_ANIME_LOG") != NULL) {
+                static int seenN[128];
+                static unsigned nN;
+                unsigned m;
+                for (m = 0; m < nN && seenN[m] != sAnimeStrip.entry[form]; m++) {
+                }
+                if (m == nN && nN < 128) {
+                    seenN[nN++] = sAnimeStrip.entry[form];
+                    fprintf(stderr, "anime: efecto normal %s: %d%% claro (edge %.3f, dir %.0f)\n", TexPack_Path(sAnimeStrip.entry[form]),
+                            pct, e, rampDir);
+                }
+            }
+        }
     }
     if (getenv("BT3_ANIME_LOG") != NULL && layer != 0) {
         /* (a line when it changes: by layer, the strips after one with anime colours and how many got the anime pass;
