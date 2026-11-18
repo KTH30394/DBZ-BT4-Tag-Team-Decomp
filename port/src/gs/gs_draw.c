@@ -4868,6 +4868,16 @@ static float anime_normal_quantile(const unsigned *hist, unsigned n, float share
     }
     return 1.0f;
 }
+/* (tenk11) the draws with the efecto normal this frame: at the end of the frame (GsGpu_FrameEnd, before anything is
+   drawn) each one's edge is set again from ALL of its piece's points of THIS frame (anime_normal_patch), so no frame is
+   cut by the frame before (a camera cut, a hit, the light moved: before, one frame or more with odd shadows). */
+#define ANIME_NORMAL_PATCHES 4096
+static struct { int draw, slot; uint64_t key; float lw, below; } sNormalPatch[ANIME_NORMAL_PATCHES];
+static unsigned sNormalPatchCount;
+static int sNormalLastSlot;
+static unsigned sNormalDone;
+static float sNormalWorst;
+static float sNormalLastBelow;
 static float anime_normal_edge(int entry, int pct, float dir, const float *vertices, uint32_t count, const float *consts) {
     unsigned s, oldest = 0, n;
     float lx = consts[40], ly = consts[44], lz = consts[48], lw = consts[52], q;
@@ -4888,14 +4898,6 @@ static float anime_normal_edge(int entry, int pct, float dir, const float *verti
             /* (the points of the last frame it was drawn in; q = L.n kept as q * 0.25 + 0.5, so any lw is out of it) */
             float target = anime_normal_quantile(sNormal[s].hist, sNormal[s].n, below);
             float diff = target - sNormal[s].edge;
-            if (getenv("BT3_ANIME_LOG") != NULL && sNormal[s].have && (diff > 0.02f || diff < -0.02f)) {
-                static unsigned nJump;
-                if (nJump < 300) {
-                    nJump++;
-                    fprintf(stderr, "anime: normal salto %s %.3f -> %.3f (frames %u)\n", TexPack_Path(entry),
-                            sNormal[s].edge, target, gGsFrame - sNormal[s].frame);
-                }
-            }
             sNormal[s].edge = (sNormal[s].have && diff < 0.02f && diff > -0.02f) ? sNormal[s].edge + diff * 0.5f : target;
             sNormal[s].have = 1;
         }
@@ -4914,6 +4916,8 @@ static float anime_normal_edge(int entry, int pct, float dir, const float *verti
         sNormal[s].hist[b]++;
         sNormal[s].n++;
     }
+    sNormalLastSlot = (int)s;
+    sNormalLastBelow = below;
     if (sNormal[s].have) {
         q = sNormal[s].edge;
     } else if (sNormal[s].n != 0) {
@@ -4923,6 +4927,33 @@ static float anime_normal_edge(int entry, int pct, float dir, const float *verti
     }
     /* back to r: r = (L.n + lw) * 0.5 + 0.5, L.n = (q - 0.5) * 4, with the lw of this strip */
     return ((q - 0.5f) * 4.0f + lw) * 0.5f + 0.5f;
+}
+/* (tenk11) at the end of the frame: every efecto normal draw cut by its piece's points of this very frame */
+static void anime_normal_patch(void) {
+    unsigned i;
+    for (i = 0; i < sNormalPatchCount; i++) {
+        int s = sNormalPatch[i].slot, d = sNormalPatch[i].draw;
+        if (s < 0 || s >= ANIME_NORMAL_SLOTS || d < 0 || d >= (int)gsDrawCount || sNormal[s].key != sNormalPatch[i].key ||
+            sNormal[s].frame != gGsFrame || sNormal[s].n == 0) {
+            continue; /* (left with the edge it was drawn with) */
+        }
+        {
+            float q = anime_normal_quantile(sNormal[s].hist, sNormal[s].n, sNormalPatch[i].below);
+            float e = ((q - 0.5f) * 4.0f + sNormalPatch[i].lw) * 0.5f + 0.5f, dd = e - gsDraws[d].misc[0];
+            dd = dd < 0.0f ? -dd : dd;
+            if (dd > sNormalWorst) sNormalWorst = dd;
+            sNormalDone++;
+            gsDraws[d].misc[0] = e;
+        }
+    }
+    if (getenv("BT3_ANIME_LOG") != NULL && gGsFrame % 300 == 0 && sNormalDone != 0) {
+        /* (every 300 frames: how many draws were cut again by their own frame, and the most one moved) */
+        fprintf(stderr, "anime: efecto normal fotograma %u: %u tiras con el corte de su mismo fotograma (el que mas se movio %.3f)\n",
+                gGsFrame, sNormalDone, sNormalWorst);
+        sNormalDone = 0;
+        sNormalWorst = 0.0f;
+    }
+    sNormalPatchCount = 0;
 }
 
 /* Vertex program 0 as a shader: one strip of the fighters' models (see shaders/vu0.vert and gs_vu1.c). The strip
@@ -5244,6 +5275,8 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
         sAnimeStrip.forms > 0) {
         form = anime_form();
     }
+    int normalSlot = -1; /* (tenk11: this strip's efecto normal piece, set again at the end of the frame) */
+    float normalLw = 0.0f, normalBelow = 0.0f;
     if (layer == 1 && form >= 0 && rampDir != 0.0f && viewSide == 0.0f && !luz) {
         /* (tenk10) the "efecto normal" (anime_normal.txt): this piece cut where that share of it is lit (anime_normal_edge) */
         int pct = TexPack_AnimeNormal(sAnimeStrip.entry[form]);
@@ -5252,6 +5285,9 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
             if (e >= 0.0f) {
                 rampEdge = e - rampDir * sAnimeStrip.cut[form];
             }
+            normalSlot = sNormalLastSlot;
+            normalLw = consts[52];
+            normalBelow = sNormalLastBelow;
             if (getenv("BT3_ANIME_LOG") != NULL) {
                 static int seenN[128];
                 static unsigned nN;
@@ -5631,6 +5667,14 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
         a.uniform = (int)gsVuUniCount;
         sUniBase[gsVuUniCount] = d.uniform + 1;
         gsVuUni[gsVuUniCount++] = au;
+        if (normalSlot >= 0 && layer == 1 && sNormalPatchCount < ANIME_NORMAL_PATCHES) {
+            sNormalPatch[sNormalPatchCount].draw = (int)gsDrawCount;
+            sNormalPatch[sNormalPatchCount].slot = normalSlot;
+            sNormalPatch[sNormalPatchCount].key = sNormal[normalSlot].key;
+            sNormalPatch[sNormalPatchCount].lw = normalLw;
+            sNormalPatch[sNormalPatchCount].below = normalBelow;
+            sNormalPatchCount++;
+        }
         gsDraws[gsDrawCount++] = a;
     }
     /* A script mod's rim light (bt3.look): after a fighter's shading layer, in the picture itself, the same triangles
@@ -8729,8 +8773,13 @@ void GsGpu_FrameEnd(void) {
     }
     sInGlowChain = 0; /* (a chain is always within one frame) */
     if (gGsResim) { /* a frame that is only being re-run: nothing was recorded, nothing is shown */
+        sNormalPatchCount = 0;
         return;
     }
+    if (!gsSkipFrame) {
+        anime_normal_patch(); /* (tenk11: the efecto normal cut by this frame's own points) */
+    }
+    sNormalPatchCount = 0;
     if (gsSkipFrame) {
         /* A skipped tick: nothing was recorded. The tick before's last pictures, if any are still waiting, are
            shown now (its real one); nothing can be blended over the gap, so the next tick has no in-between
