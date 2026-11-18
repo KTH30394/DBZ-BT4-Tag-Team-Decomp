@@ -3120,16 +3120,36 @@ static GsTex texture_get(int ctx, int menuHd) {
         if (row < 0 && !anyKnown) {
             rowlessFound = animeFound; /* (tenk2: made again once a fighter is known, anime_tex_current) */
         }
+        int nowModel = anime_row_model(sFighterRowNow), firstId = animeFound > 0 ? animeIds[0] : -1, before = animeFound;
         for (f = 0; f < animeFound; f++) {
             int fo = TexPack_AnimeFolder(animeIds[f]);
             /* (tenk2) program 1's textures (the second pass over a part) carry another row in their palette (the other
                fighter's): any fighter on the screen */
-            if (row >= 0 ? ((strict ? anime_folder_ok_strict(fo, row) : anime_folder_ok(fo, row)) || (gVuProgram1 && anime_folder_ok_any(fo)))
-                         : anime_folder_ok_any(fo)) {
+            int ok = row >= 0 ? ((strict ? anime_folder_ok_strict(fo, row) : anime_folder_ok(fo, row)) || (gVuProgram1 && anime_folder_ok_any(fo)))
+                              : anime_folder_ok_any(fo);
+            /* (tenk16, 18-nov-2026) a texture whose palette carries a row no fighter has (Goku SSJ3 destroyed: the arm 37c4,
+               drawn with the game's own colours since tenk9): the folder of the fighter being drawn now (sFighterRowNow) */
+            if (!ok && row >= 0 && anime_row_model(row) < 0 && anyKnown && nowModel >= 0 && TexPack_AnimeFolderAllows(fo, nowModel)) {
+                ok = 1;
+            }
+            if (ok) {
                 animeIds[k++] = animeIds[f];
             }
         }
         animeFound = k;
+        if (before > 0 && k == 0 && getenv("BT3_ANIME_LOG") != NULL) {
+            static uint64_t seenNo[64];
+            static unsigned nNo;
+            uint64_t key = (uint64_t)(unsigned)firstId * 131u + (uint64_t)(row + 1);
+            unsigned m;
+            for (m = 0; m < nNo && seenNo[m] != key; m++) {
+            }
+            if (m == nNo && nNo < 64) {
+                seenNo[nNo++] = key;
+                fprintf(stderr, "anime: sin carpeta para %s: fila %d (modelo %d), luchador dibujado fila %d (modelo %d)\n",
+                        TexPack_Path(firstId), row, anime_row_model(row), sFighterRowNow, nowModel);
+            }
+        }
         if (animeFound > 1 && (row < 0 || gVuProgram1)) {
             /* (tenk10) taken by "any fighter on the screen" and more than one folder left: when some are for the fighter
                being drawn now (sFighterRowNow) and others only for another fighter, those others go (two fighters on
