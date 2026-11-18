@@ -3136,6 +3136,27 @@ static GsTex texture_get(int ctx, int menuHd) {
                 animeIds[k++] = animeIds[f];
             }
         }
+        if (k == 0 && before > 0 && row >= 0 && anyKnown && nowModel >= 0 && nowModel != anime_row_model(row)) {
+            /* (tenk17) none for the fighter its palette names (Goku SSJ3 destroyed: the arm 37c4 carries row 1, the other
+               fighter's, who has no such file): the folders of the fighter being drawn now */
+            for (f = 0; f < before; f++) {
+                if (TexPack_AnimeFolderAllows(TexPack_AnimeFolder(animeIds[f]), nowModel)) {
+                    animeIds[k++] = animeIds[f];
+                }
+            }
+            if (k > 0 && getenv("BT3_ANIME_LOG") != NULL) {
+                static int seenF[64];
+                static unsigned nF;
+                unsigned m;
+                for (m = 0; m < nF && seenF[m] != animeIds[0]; m++) {
+                }
+                if (m == nF && nF < 64) {
+                    seenF[nF++] = animeIds[0];
+                    fprintf(stderr, "anime: %s con la carpeta del luchador dibujado (fila %d modelo %d; su paleta dice fila %d modelo %d)\n",
+                            TexPack_Path(animeIds[0]), sFighterRowNow, nowModel, row, anime_row_model(row));
+                }
+            }
+        }
         animeFound = k;
         if (before > 0 && k == 0 && getenv("BT3_ANIME_LOG") != NULL) {
             static uint64_t seenNo[64];
