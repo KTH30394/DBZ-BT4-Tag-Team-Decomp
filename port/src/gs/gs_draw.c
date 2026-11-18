@@ -5427,14 +5427,14 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
             drawn[layer] += anime && form >= 0 && rampDir != 0.0f && Mods_Look()->shading > 0;
             if (anime && !(form >= 0 && rampDir != 0.0f) && layer == 1) {
                 /* (tenk19) once a texture: a strip with anime colours left to the game, and why */
-                static int seenU[64];
+                static int seenU[96];
                 static unsigned nU;
                 unsigned m;
                 for (m = 0; m < nU && seenU[m] != sAnimeStrip.entry[0]; m++) {
                 }
                 if (m == nU && nU < 64) {
                     seenU[nU++] = sAnimeStrip.entry[0];
-                    fprintf(stderr, "anime: tira sin pase anime %s (forma %d, rampa %.0f, fila %d, luchador %d)\n",
+                    fprintf(stderr, "anime: tira con colores anime dejada al juego: %s (forma %d, rampa %.0f, fila de la textura %d, luchador dibujado %d)\n",
                             TexPack_Path(sAnimeStrip.entry[0]), form, rampDir, sAnimeStrip.row, sFighterRowNow);
                 }
             }
