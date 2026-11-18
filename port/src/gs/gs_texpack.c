@@ -110,6 +110,8 @@ typedef struct AnimeFolder {
     int normal;        /* (tenk10) anime_normal.txt: the "efecto normal", percent of each piece lit (1..99), 0 = none */
     uint64_t *normalOff; /* and the texture hashes on its next lines: pieces left as they were (TexPack_AnimeNormal) */
     int normalOffCount;
+    uint64_t *normalPair; /* (tenk11) "= blink base" lines: blink texture, its base (pairs) */
+    int normalPairCount;
 } AnimeFolder;
 
 /* A file of texture hashes, one a line (hexadecimal; anything after it ignored). 1 = it is there. */
@@ -299,6 +301,16 @@ static int folder_of(const char *dir) {
                 if (end != line) {
                     a->normal = v < 1 ? 1 : v > 99 ? 99 : (int)v;
                     first = 0;
+                }
+            } else if (line[0] == '=') {
+                /* (tenk11) "= <blink> <base>": the blink texture is the same piece as its base (one edge for both) */
+                char *p2;
+                unsigned long long v1 = strtoull(line + 1, &end, 16), v2 = strtoull(end, &p2, 16);
+                if (end != line + 1 && p2 != end) {
+                    a->normalPair = realloc(a->normalPair, (size_t)(a->normalPairCount + 1) * 2 * sizeof(uint64_t));
+                    a->normalPair[a->normalPairCount * 2] = (uint64_t)v1;
+                    a->normalPair[a->normalPairCount * 2 + 1] = (uint64_t)v2;
+                    a->normalPairCount++;
                 }
             } else {
                 unsigned long long v = strtoull(line, &end, 16);
@@ -521,7 +533,7 @@ void TexPack_Init(void) {
         sBucket[h] = i + 1;
     }
     fprintf(stderr, "bt3: texture pack: %u replacement textures in %s (%u more with a name already seen)\n", sCount - dup, root, dup);
-    fprintf(stderr, "bt4 anime: build tenk10 (17-nov-2026; efecto normal: anime_normal.txt, cada pieza con el % de claro pedido por la luz real en cualquier escenario; carpetas con anime_models solo para sus modelos, nunca para un modelo aun no sabido; tenk9: lineas y contorno con su grosor normal hasta el limite de cerca (anime_lineas_cerca.txt) y luego crecen con el modelo hasta 2x; redes de lineas unidas a una mancha gorda vuelven a ser lineas; tenk8: rayas gruesas del pelo SSJ como lineas; caras en alta resolucion: archivos de cara 2, 4 u 8 veces mas grandes, pintados tal cual; de cerca todas las lineas y el contorno hasta 2x, la M hasta 4x (anime_lineas_cerca.txt); lineas suaves por el codigo, caras como su archivo; brillo de Freezer con su dibujo; museo: R2/L2 zoom y cruceta para mover el modelo; tenk1 + contorno y uniones entre partes con el grosor y borde suave de las lineas de dentro; capas metalicas de Cell, Cell 2a y pantalon de Vegeta SSJ4 ocultas por nombre; texturas sin fila de luchador con sus colores anime: brillo de Freezer con sus 3 colores)\n");
+    fprintf(stderr, "bt4 anime: build tenk11 (18-nov-2026; efecto normal: la cara al parpadear es la misma pieza que su base (lineas = en anime_normal.txt) y el corte sigue al instante los cambios de luz del juego (sin sombras raras a ratos); tenk10: efecto normal: anime_normal.txt, cada pieza con el tanto por ciento de claro pedido por la luz real en cualquier escenario; carpetas con anime_models solo para sus modelos, nunca para un modelo aun no sabido; tenk9: lineas y contorno con su grosor normal hasta el limite de cerca (anime_lineas_cerca.txt) y luego crecen con el modelo hasta 2x; redes de lineas unidas a una mancha gorda vuelven a ser lineas; tenk8: rayas gruesas del pelo SSJ como lineas; caras en alta resolucion: archivos de cara 2, 4 u 8 veces mas grandes, pintados tal cual; de cerca todas las lineas y el contorno hasta 2x, la M hasta 4x (anime_lineas_cerca.txt); lineas suaves por el codigo, caras como su archivo; brillo de Freezer con su dibujo; museo: R2/L2 zoom y cruceta para mover el modelo; tenk1 + contorno y uniones entre partes con el grosor y borde suave de las lineas de dentro; capas metalicas de Cell, Cell 2a y pantalon de Vegeta SSJ4 ocultas por nombre; texturas sin fila de luchador con sus colores anime: brillo de Freezer con sus 3 colores)\n");
 }
 
 int TexPack_Count(void) {
@@ -878,6 +890,20 @@ int TexPack_AnimeNormal(int id) {
         }
     }
     return sFolders[folder].normal;
+}
+
+/* (tenk11) which piece a texture with the "efecto normal" is: its own hash, or for a blink face ("= blink base" in
+   anime_normal.txt) the hash of its base face, so both are cut by one edge */
+uint64_t TexPack_AnimeNormalKey(int id) {
+    int folder = TexPack_AnimeFolder(id), k;
+    if (folder >= 0) {
+        for (k = 0; k < sFolders[folder].normalPairCount; k++) {
+            if (sFolders[folder].normalPair[k * 2] == sEntries[id].tex) {
+                return sFolders[folder].normalPair[k * 2 + 1];
+            }
+        }
+    }
+    return sEntries[id].tex;
 }
 
 /* 1 = some folder has an anime_models.txt (the decoded textures then depend on which models the fighters have) */

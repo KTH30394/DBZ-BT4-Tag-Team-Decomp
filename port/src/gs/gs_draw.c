@@ -4846,9 +4846,16 @@ static int anime_form(void) {
    on the ramp its points are this frame (r as vu0.vert layer 7, as the rstat lines in the log have it), and is cut where
    that share of them falls on the lit side; drawn with the edge of the frame before, half way towards the new one each
    frame (no shaking). The first frame it is seen: the points of its strips so far. -1 = none yet. */
+/* (tenk11, 18-nov-2026) Two fixes the user saw on Cell: (1) the blink face is another texture: it was its own piece with
+   its own edge, so some shadows of the face changed while blinking; now a blink texture is the SAME piece as its base
+   ("= blink base" lines in anime_normal.txt, TexPack_AnimeNormalKey). (2) At moments the shadows of the whole body went
+   odd: the edge was kept on r, which carries the light's offset lw; when the game moves lw at once (a hit, a flash) the
+   edge followed half way a frame and the body was cut wrong for a few frames. Now the points are kept WITHOUT lw (their
+   L.n) and the edge turned back to r with the lw of THIS strip; a big change of the piece's own light is taken at once
+   (no half way), and a piece not drawn for a while keeps the edge it had (no frame cut by the first strips only). */
 #define ANIME_NORMAL_SLOTS 192
-#define ANIME_NORMAL_BINS 256
-static struct { int entry; uint32_t frame; unsigned n, hist[ANIME_NORMAL_BINS]; float edge; int have; } sNormal[ANIME_NORMAL_SLOTS];
+#define ANIME_NORMAL_BINS 512
+static struct { uint64_t key; uint32_t frame; unsigned n, hist[ANIME_NORMAL_BINS]; float edge; int have; } sNormal[ANIME_NORMAL_SLOTS];
 static float anime_normal_quantile(const unsigned *hist, unsigned n, float share) {
     /* the r below which `share` of the points are, the bin's points taken as spread evenly across it */
     float want = share * (float)n, acc = 0.0f;
@@ -4863,25 +4870,34 @@ static float anime_normal_quantile(const unsigned *hist, unsigned n, float share
 }
 static float anime_normal_edge(int entry, int pct, float dir, const float *vertices, uint32_t count, const float *consts) {
     unsigned s, oldest = 0, n;
-    float lx = consts[40], ly = consts[44], lz = consts[48], lw = consts[52];
+    float lx = consts[40], ly = consts[44], lz = consts[48], lw = consts[52], q;
+    uint64_t key = TexPack_AnimeNormalKey(entry);
     /* lit where (r - edge) * -dir >= 0: dir -1, r above the edge (the edge where 1 - share of them are below); dir 1, below */
     float below = dir < 0.0f ? 1.0f - (float)pct / 100.0f : (float)pct / 100.0f;
-    for (s = 0; s < ANIME_NORMAL_SLOTS && sNormal[s].entry != entry + 1; s++) {
+    for (s = 0; s < ANIME_NORMAL_SLOTS && !(sNormal[s].key == key && sNormal[s].frame != 0); s++) {
         if (sNormal[s].frame < sNormal[oldest].frame) oldest = s;
     }
     if (s == ANIME_NORMAL_SLOTS) { /* (a piece not seen yet: the slot left longest) */
         s = oldest;
         memset(&sNormal[s], 0, sizeof(sNormal[s]));
-        sNormal[s].entry = entry + 1;
-        sNormal[s].frame = gGsFrame;
+        sNormal[s].key = key;
+        sNormal[s].frame = gGsFrame ? gGsFrame : 1u;
     }
     if (sNormal[s].frame != gGsFrame) {
-        if (sNormal[s].n != 0 && gGsFrame - sNormal[s].frame <= 2u) {
+        if (sNormal[s].n != 0) {
+            /* (the points of the last frame it was drawn in; q = L.n kept as q * 0.25 + 0.5, so any lw is out of it) */
             float target = anime_normal_quantile(sNormal[s].hist, sNormal[s].n, below);
-            sNormal[s].edge = sNormal[s].have ? sNormal[s].edge + (target - sNormal[s].edge) * 0.5f : target;
+            float diff = target - sNormal[s].edge;
+            if (getenv("BT3_ANIME_LOG") != NULL && sNormal[s].have && (diff > 0.02f || diff < -0.02f)) {
+                static unsigned nJump;
+                if (nJump < 300) {
+                    nJump++;
+                    fprintf(stderr, "anime: normal salto %s %.3f -> %.3f (frames %u)\n", TexPack_Path(entry),
+                            sNormal[s].edge, target, gGsFrame - sNormal[s].frame);
+                }
+            }
+            sNormal[s].edge = (sNormal[s].have && diff < 0.02f && diff > -0.02f) ? sNormal[s].edge + diff * 0.5f : target;
             sNormal[s].have = 1;
-        } else {
-            sNormal[s].have = 0; /* (not drawn for a while: from what it is now) */
         }
         memset(sNormal[s].hist, 0, sizeof(sNormal[s].hist));
         sNormal[s].n = 0;
@@ -4892,16 +4908,21 @@ static float anime_normal_edge(int entry, int pct, float dir, const float *verti
         float wx = consts[0] * nv[0] + consts[4] * nv[1] + consts[8] * nv[2];
         float wy = consts[1] * nv[0] + consts[5] * nv[1] + consts[9] * nv[2];
         float wz = consts[2] * nv[0] + consts[6] * nv[1] + consts[10] * nv[2];
-        float r = (lx * wx + ly * wy + lz * wz + lw) * 0.5f + 0.5f;
-        int b = (int)(r * (float)ANIME_NORMAL_BINS);
+        float d = (lx * wx + ly * wy + lz * wz) * 0.25f + 0.5f;
+        int b = (int)(d * (float)ANIME_NORMAL_BINS);
         b = b < 0 ? 0 : b >= ANIME_NORMAL_BINS ? ANIME_NORMAL_BINS - 1 : b;
         sNormal[s].hist[b]++;
         sNormal[s].n++;
     }
     if (sNormal[s].have) {
-        return sNormal[s].edge;
+        q = sNormal[s].edge;
+    } else if (sNormal[s].n != 0) {
+        q = anime_normal_quantile(sNormal[s].hist, sNormal[s].n, below);
+    } else {
+        return -1.0f;
     }
-    return sNormal[s].n != 0 ? anime_normal_quantile(sNormal[s].hist, sNormal[s].n, below) : -1.0f;
+    /* back to r: r = (L.n + lw) * 0.5 + 0.5, L.n = (q - 0.5) * 4, with the lw of this strip */
+    return ((q - 0.5f) * 4.0f + lw) * 0.5f + 0.5f;
 }
 
 /* Vertex program 0 as a shader: one strip of the fighters' models (see shaders/vu0.vert and gs_vu1.c). The strip

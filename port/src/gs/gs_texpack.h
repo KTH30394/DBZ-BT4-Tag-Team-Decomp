@@ -61,6 +61,8 @@ int TexPack_AnimeFolderHasModels(int folder);
 /* (tenk10) "anime_normal.txt" in its folder (first number: percent lit, then hashes left out): the "efecto normal",
    every piece cut where that share of its points is lit by the real light, each frame (gs_draw.c). 0 = none. */
 int TexPack_AnimeNormal(int id);
+/* (tenk11) the piece a texture with the efecto normal belongs to: its hash, or its base's for a "= blink base" line */
+uint64_t TexPack_AnimeNormalKey(int id);
 int TexPack_AnimeAnyModels(void);
 int TexPack_AnimeIsMarker(int id);
 /* One of the textures listed in its folder's "anime_hair.txt" (hashes, one a line): hair, drawn with a dark line along
