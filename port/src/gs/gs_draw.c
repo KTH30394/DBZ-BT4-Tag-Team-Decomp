@@ -4872,7 +4872,7 @@ static float anime_normal_quantile(const unsigned *hist, unsigned n, float share
    drawn) each one's edge is set again from ALL of its piece's points of THIS frame (anime_normal_patch), so no frame is
    cut by the frame before (a camera cut, a hit, the light moved: before, one frame or more with odd shadows). */
 #define ANIME_NORMAL_PATCHES 4096
-static struct { int draw, slot; uint64_t key; float lw, below; } sNormalPatch[ANIME_NORMAL_PATCHES];
+static struct { int draw, slot; uint64_t key; uint32_t frame; float lw, below; } sNormalPatch[ANIME_NORMAL_PATCHES];
 static unsigned sNormalPatchCount;
 static int sNormalLastSlot;
 static unsigned sNormalDone;
@@ -4931,11 +4931,21 @@ static float anime_normal_edge(int entry, int pct, float dir, const float *verti
 /* (tenk11) at the end of the frame: every efecto normal draw cut by its piece's points of this very frame */
 static void anime_normal_patch(void) {
     unsigned i;
+    static unsigned calls, miss[4];
+    calls++;
     for (i = 0; i < sNormalPatchCount; i++) {
         int s = sNormalPatch[i].slot, d = sNormalPatch[i].draw;
-        if (s < 0 || s >= ANIME_NORMAL_SLOTS || d < 0 || d >= (int)gsDrawCount || sNormal[s].key != sNormalPatch[i].key ||
-            sNormal[s].frame != gGsFrame || sNormal[s].n == 0) {
+        if (s < 0 || s >= ANIME_NORMAL_SLOTS || d < 0 || d >= (int)gsDrawCount) {
+            miss[0]++;
             continue; /* (left with the edge it was drawn with) */
+        }
+        if (sNormal[s].key != sNormalPatch[i].key) {
+            miss[1]++;
+            continue;
+        }
+        if (sNormal[s].frame != sNormalPatch[i].frame || sNormal[s].n == 0) {
+            miss[2]++;
+            continue;
         }
         {
             float q = anime_normal_quantile(sNormal[s].hist, sNormal[s].n, sNormalPatch[i].below);
@@ -4946,10 +4956,11 @@ static void anime_normal_patch(void) {
             gsDraws[d].misc[0] = e;
         }
     }
-    if (getenv("BT3_ANIME_LOG") != NULL && gGsFrame % 300 == 0 && sNormalDone != 0) {
-        /* (every 300 frames: how many draws were cut again by their own frame, and the most one moved) */
-        fprintf(stderr, "anime: efecto normal fotograma %u: %u tiras con el corte de su mismo fotograma (el que mas se movio %.3f)\n",
-                gGsFrame, sNormalDone, sNormalWorst);
+    if (getenv("BT3_ANIME_LOG") != NULL && sNormalPatchCount != 0 && (calls % 300 == 0 || calls < 3)) {
+        /* (every 300 frames with such draws: how many were cut again by their own frame, and the most one moved) */
+        fprintf(stderr, "anime: efecto normal fotograma %u: %u tiras con el corte de su mismo fotograma (el que mas se movio %.3f; sin hacer %u %u %u)\n",
+                gGsFrame, sNormalDone, sNormalWorst, miss[0], miss[1], miss[2]);
+        miss[0] = miss[1] = miss[2] = 0;
         sNormalDone = 0;
         sNormalWorst = 0.0f;
     }
@@ -5671,6 +5682,7 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
             sNormalPatch[sNormalPatchCount].draw = (int)gsDrawCount;
             sNormalPatch[sNormalPatchCount].slot = normalSlot;
             sNormalPatch[sNormalPatchCount].key = sNormal[normalSlot].key;
+            sNormalPatch[sNormalPatchCount].frame = sNormal[normalSlot].frame;
             sNormalPatch[sNormalPatchCount].lw = normalLw;
             sNormalPatch[sNormalPatchCount].below = normalBelow;
             sNormalPatchCount++;
