@@ -2862,6 +2862,7 @@ static GsTex texture_get(int ctx, int menuHd) {
     GsTex animeTex[ANIME_FORMS];
     float animeCut[ANIME_FORMS];
     int animeEntry[ANIME_FORMS], animeTones[ANIME_FORMS], animeLines[ANIME_FORMS] = {0}, animeRow = -1;
+    int rowOverride = -1; /* (tenk19) the row of the fighter whose folder it got (tenk17), when its palette names another */
     uint64_t markForms = 0;
     uint32_t rampHash = 0, packName = 0;
     uint64_t texName = 0;
@@ -3144,6 +3145,9 @@ static GsTex texture_get(int ctx, int menuHd) {
                     animeIds[k++] = animeIds[f];
                 }
             }
+            if (k > 0) {
+                rowOverride = sFighterRowNow;
+            }
             if (k > 0 && getenv("BT3_ANIME_LOG") != NULL) {
                 static int seenF[64];
                 static unsigned nF;
@@ -3249,6 +3253,12 @@ static GsTex texture_get(int ctx, int menuHd) {
     }
     animeRow = (animeCount != 0 || markForms != 0) && px != NULL && rw == tw && rh == th && (px[0] >> 24) < 0x80 ?
                (int)((px[0] >> 24) / 15) : -1;
+    if (rowOverride >= 0 && animeCount != 0) {
+        /* (tenk19, 18-nov-2026) Goku SSJ3 destroyed, the arm 37c4: its palette carries row 1 (the other fighter's); it got
+           the folder of the fighter drawn (tenk17) but kept row 1, so no form of his was "seen" by that row and its strips
+           were drawn with the game's own picture (the peach arm the user saw). It is that fighter's texture: his row. */
+        animeRow = rowOverride;
+    }
     glossRow = texName != 0 && TexPack_GlossAny(texName) && px != NULL && rw == tw && rh == th && (px[0] >> 24) < 0x80 ?
                (int)((px[0] >> 24) / 15) : -1;
     gGpuTexNs += gpu_now() - tex_t0;
@@ -5415,6 +5425,19 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
             int anime = sAnimeStrip.vertices == vertices && sAnimeStrip.forms > 0;
             after[layer] += anime;
             drawn[layer] += anime && form >= 0 && rampDir != 0.0f && Mods_Look()->shading > 0;
+            if (anime && !(form >= 0 && rampDir != 0.0f) && layer == 1) {
+                /* (tenk19) once a texture: a strip with anime colours left to the game, and why */
+                static int seenU[64];
+                static unsigned nU;
+                unsigned m;
+                for (m = 0; m < nU && seenU[m] != sAnimeStrip.entry[0]; m++) {
+                }
+                if (m == nU && nU < 64) {
+                    seenU[nU++] = sAnimeStrip.entry[0];
+                    fprintf(stderr, "anime: tira sin pase anime %s (forma %d, rampa %.0f, fila %d, luchador %d)\n",
+                            TexPack_Path(sAnimeStrip.entry[0]), form, rampDir, sAnimeStrip.row, sFighterRowNow);
+                }
+            }
             plain[layer] += !anime;
             if (!anime && layer == 5) {
                 /* (once a texture: a program 1 strip (a gloss pass) drawn as the game draws it, without anime colours:
