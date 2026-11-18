@@ -4878,6 +4878,31 @@ static int anime_form(void) {
             }
         }
     }
+    if (any < 0 && sFighterRowNow >= 0 && sFighterRowNow != row) {
+        /* (tenk18, 18-nov-2026) a texture whose palette names another fighter's row (Goku SSJ3 destroyed: the arm 37c4
+           carries row 1): no form of its folder was seen by that row, so it was left with the game's own picture (the
+           user: "the arms still have the old texture"). The form seen by the fighter being drawn now. */
+        for (f = 0; f < sAnimeStrip.forms; f++) {
+            int folder = TexPack_AnimeFolder(sAnimeStrip.entry[f]);
+            for (s = 0; s < 32; s++) {
+                if (form_seen(s, folder, sFighterRowNow)) {
+                    if (getenv("BT3_ANIME_LOG") != NULL) {
+                        static int seenFo[64];
+                        static unsigned nFo;
+                        unsigned m;
+                        for (m = 0; m < nFo && seenFo[m] != sAnimeStrip.entry[f]; m++) {
+                        }
+                        if (m == nFo && nFo < 64) {
+                            seenFo[nFo++] = sAnimeStrip.entry[f];
+                            fprintf(stderr, "anime: forma de %s por el luchador dibujado (fila %d; la textura dice fila %d)\n",
+                                    TexPack_Path(sAnimeStrip.entry[f]), sFighterRowNow, row);
+                        }
+                    }
+                    return f;
+                }
+            }
+        }
+    }
     return any;
 }
 
