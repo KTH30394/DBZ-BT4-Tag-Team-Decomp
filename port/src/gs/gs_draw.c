@@ -4932,7 +4932,9 @@ static float anime_normal_edge(int entry, int pct, float dir, const float *verti
 static void anime_normal_patch(void) {
     unsigned i;
     static unsigned calls, miss[4];
-    calls++;
+    if (sNormalPatchCount != 0) {
+        calls++; /* (frames with efecto normal draws) */
+    }
     for (i = 0; i < sNormalPatchCount; i++) {
         int s = sNormalPatch[i].slot, d = sNormalPatch[i].draw;
         if (s < 0 || s >= ANIME_NORMAL_SLOTS || d < 0 || d >= (int)gsDrawCount) {
@@ -4956,7 +4958,7 @@ static void anime_normal_patch(void) {
             gsDraws[d].misc[0] = e;
         }
     }
-    if (getenv("BT3_ANIME_LOG") != NULL && sNormalPatchCount != 0 && (calls % 300 == 0 || calls < 3)) {
+    if (getenv("BT3_ANIME_LOG") != NULL && sNormalPatchCount != 0 && (calls % 300 == 0 || calls <= 3)) {
         /* (every 300 frames with such draws: how many were cut again by their own frame, and the most one moved) */
         fprintf(stderr, "anime: efecto normal fotograma %u: %u tiras con el corte de su mismo fotograma (el que mas se movio %.3f; sin hacer %u %u %u)\n",
                 gGsFrame, sNormalDone, sNormalWorst, miss[0], miss[1], miss[2]);
@@ -5678,6 +5680,12 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
         a.uniform = (int)gsVuUniCount;
         sUniBase[gsVuUniCount] = d.uniform + 1;
         gsVuUni[gsVuUniCount++] = au;
+        if (normalSlot >= 0 && getenv("BT3_ANIME_LOG") != NULL) {
+            static unsigned nRec;
+            if (nRec++ == 0) {
+                fprintf(stderr, "anime: efecto normal: primera tira apuntada para el corte de fin de fotograma (fotograma %u)\n", gGsFrame);
+            }
+        }
         if (normalSlot >= 0 && layer == 1 && sNormalPatchCount < ANIME_NORMAL_PATCHES) {
             sNormalPatch[sNormalPatchCount].draw = (int)gsDrawCount;
             sNormalPatch[sNormalPatchCount].slot = normalSlot;
