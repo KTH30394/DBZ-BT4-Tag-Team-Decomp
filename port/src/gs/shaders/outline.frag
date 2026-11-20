@@ -15,6 +15,21 @@ layout(set = 3, binding = 0) uniform Params {
                  // (gs_draw.c GsDraw_OutlineCaps: no wider than the lines inside, anime_lineas.txt); 0 = as it is
 #endif
 } p;
+#ifndef NO_CAP
+// (tenk22, 20-nov-2026) the object numbers of the thin pieces (gs_draw.c anime_contorno_fino.txt: Syn/Omega's whiskers) and how
+// many times as wide their line is drawn: cap[1..3] = 6 pairs <number> <times>, -10 = none
+float thinTimes(vec2 uv) {
+    int id = int(texture(aux, uv).r * 255.0 + 0.5);
+    float t = 1.0;
+    if (id == int(floor(p.cap[1].x + 0.5))) t = p.cap[1].y;
+    if (id == int(floor(p.cap[1].z + 0.5))) t = p.cap[1].w;
+    if (id == int(floor(p.cap[2].x + 0.5))) t = p.cap[2].y;
+    if (id == int(floor(p.cap[2].z + 0.5))) t = p.cap[2].w;
+    if (id == int(floor(p.cap[3].x + 0.5))) t = p.cap[3].y;
+    if (id == int(floor(p.cap[3].z + 0.5))) t = p.cap[3].w;
+    return t;
+}
+#endif
 float table(vec2 uv) {
     int id = int(texture(aux, uv).r * 255.0 + 0.5);
     if (id == 255) return 0.0;           // "nothing" (stage, sky): the table gives it no colour, so an object next to it has an edge
@@ -70,7 +85,11 @@ void main() {
         // side of the edge, black, coverage 1 - smoothstep(hh - 0.5, hh + 0.5, |s - hh|) with hh = W / 2 and s the distance
         // from the edge (into the larger side; negative outside it), the edge a straight one through the 5 x 5 round it
         float hh = 0.5 * p.cap[0].x, cov = 0.0;
+        // (tenk22) a thin piece's line narrower: inside it (this pixel's number), and outside a thin piece next to it
+        float hIn = hh * thinTimes(vUv);
+        float hOut = hh * min(min(thinTimes(vUv - txv), thinTimes(vUv + txv)), min(thinTimes(vUv - ty), thinTimes(vUv + ty)));
         if (inner) {
+            hh = hIn;
             float other = 0.0;
             for (int j = -2; j <= 2; j++) {
                 for (int i = -2; i <= 2; i++) {
@@ -86,6 +105,7 @@ void main() {
             cov = max(cov, 1.0 - smoothstep(hh - 0.5, hh + 0.5, abs(s - hh)));
         }
         if (hi > here) {
+            hh = hOut;
             float larger = 0.0;
             for (int j = -2; j <= 2; j++) {
                 for (int i = -2; i <= 2; i++) {

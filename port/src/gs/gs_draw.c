@@ -1209,6 +1209,49 @@ static float anime_thick_times(int entry) {
     for (k = 0; k < sThickN; k++) if (sThick[k].hash == h && sThick[k].times > m) m = sThick[k].times;
     return m;
 }
+/* (tenk22, 20-nov-2026) Thin pieces whose OUTLINE is drawn narrower (Syn/Omega Shenron's whiskers: the user, "muy lejos se
+   ve fina ... ampliando y antes de que se vea bien de cerca, se ve gordisima ... las 2 lineas se juntan"): the piece is so
+   thin that the line on each of its edges, drawn inside it, meets the other and the whole piece looks black.
+   textures/anime_contorno_fino.txt, a line each: <hash16> <times> (0.1 .. 1). Each such texture's object number (its
+   alpha: row * 15 + slot) is noted when it is decoded; outline.frag draws the line of a pixel of that number <times> as
+   wide (cap[1..3]: up to 6 pairs number, times). */
+typedef struct { uint64_t hash; float times; } AnimeThin;
+static AnimeThin sThin[16];
+static int sThinN = -1;
+static float sThinId[256]; /* times for each object number, 0 = not thin */
+static void anime_thin_read(void) {
+    FILE *f;
+    char line[256];
+    if (sThinN >= 0) return;
+    sThinN = 0;
+    f = fopen("textures/anime_contorno_fino.txt", "r");
+    if (f == NULL) return;
+    while (fgets(line, sizeof(line), f) != NULL && sThinN < 16) {
+        char hs[40];
+        float t;
+        if (line[0] == '#') continue;
+        if (sscanf(line, "%39s %f", hs, &t) != 2 || t < 0.1f || t > 1.0f) continue;
+        sThin[sThinN].hash = anime_name_hash(hs);
+        sThin[sThinN].times = t;
+        sThinN++;
+    }
+    fclose(f);
+    fprintf(stderr, "anime: contorno fino: %d piezas (anime_contorno_fino.txt)\n", sThinN);
+}
+static void anime_thin_note(uint64_t texName, const uint32_t *px, int n) {
+    int k;
+    if (texName == 0 || px == NULL || n <= 0) return;
+    anime_thin_read();
+    for (k = 0; k < sThinN; k++) {
+        if (sThin[k].hash == texName) {
+            int id = (int)(px[0] >> 24);
+            if (id < 255 && sThinId[id] != sThin[k].times) {
+                sThinId[id] = sThin[k].times;
+                fprintf(stderr, "anime: contorno fino %016llx: objeto %d x%.2f\n", (unsigned long long)texName, id, sThin[k].times);
+            }
+        }
+    }
+}
 static uint64_t sLinesHash; /* (the file anime_lines_make is working on: anime_lines_get) */
 static int anime_lines_face(int entry);
 /* (Rev31) the width every line inside a piece is drawn at, in PS2 pixels: textures/anime_lineas_grosor.txt, 0.4 */
@@ -3261,6 +3304,9 @@ static GsTex texture_get(int ctx, int menuHd) {
     }
     glossRow = texName != 0 && TexPack_GlossAny(texName) && px != NULL && rw == tw && rh == th && (px[0] >> 24) < 0x80 ?
                (int)((px[0] >> 24) / 15) : -1;
+    if (texName != 0 && px != NULL && rw == tw && rh == th) {
+        anime_thin_note(texName, px, (int)(tw * th)); /* (tenk22) its object number, if its outline is drawn narrower */
+    }
     gGpuTexNs += gpu_now() - tex_t0;
     gDrawTexNs += gpu_now() - tex_t0;
     gDrawNewTex++;
@@ -4768,6 +4814,22 @@ void GsDraw_OutlineCaps(float caps[16]) {
         /* (tenk9) as gs.frag: its width on the screen until a face texel is A pixels, then growing with the model, kAll at most */
         float k = anime_lines_near(0), a = anime_lines_near(2), f = sOutlinePptShown / (a > 0.5f ? a : 0.5f);
         caps[0] *= f < 1.0f ? 1.0f : f > k ? k : f;
+    }
+    {
+        /* (tenk22) cap[1..3] (no longer read by outline.frag since tenk2): up to 6 pairs <object number> <times> of the thin
+           pieces (anime_contorno_fino.txt); -10 = none */
+        int id, n = 0;
+        for (id = 4; id < 16; id += 2) {
+            caps[id] = -10.0f;
+            caps[id + 1] = 1.0f;
+        }
+        for (id = 0; id < 255 && n < 6; id++) {
+            if (sThinId[id] > 0.0f) {
+                caps[4 + 2 * n] = (float)id;
+                caps[5 + 2 * n] = sThinId[id];
+                n++;
+            }
+        }
     }
 }
 /* GS pixels (down the screen) one unit of the model is at the middle of this strip: vu0.vert's screen matrix (VU 14..17)
