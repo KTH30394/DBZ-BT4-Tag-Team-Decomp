@@ -1215,10 +1215,15 @@ static float anime_thick_times(int entry) {
    textures/anime_contorno_fino.txt, a line each: <hash16> <times> (0.1 .. 1). Each such texture's object number (its
    alpha: row * 15 + slot) is noted when it is decoded; outline.frag draws the line of a pixel of that number <times> as
    wide (cap[1..3]: up to 6 pairs number, times). */
-typedef struct { uint64_t hash; float times; } AnimeThin;
+/* (tenk23) each line also lists the MODELS it is for (<hash16> <times> <model> [<model> ...]): the texture b2987a9d is a
+   reflection many fighters share, and tenk22 thinned the outline of another fighter's object of the same number (his face:
+   the user, Vegetto, Majin Vegeta, Gogeta). The mark holds only while that row of the alpha table has one of those models. */
+typedef struct { uint64_t hash; float times; int models[8], modelN; } AnimeThin;
 static AnimeThin sThin[16];
 static int sThinN = -1;
 static float sThinId[256]; /* times for each object number, 0 = not thin */
+static int sThinModel[256]; /* the model the number was noted for */
+static int sRowModel[64]; /* (tentative: defined with Port_AnimeRowModel below) */
 static void anime_thin_read(void) {
     FILE *f;
     char line[256];
@@ -1230,9 +1235,18 @@ static void anime_thin_read(void) {
         char hs[40];
         float t;
         if (line[0] == '#') continue;
-        if (sscanf(line, "%39s %f", hs, &t) != 2 || t < 0.1f || t > 1.0f) continue;
+        int used = 0, m;
+        char *q;
+        if (sscanf(line, "%39s %f%n", hs, &t, &used) != 2 || t < 0.1f || t > 1.0f) continue;
         sThin[sThinN].hash = anime_name_hash(hs);
         sThin[sThinN].times = t;
+        sThin[sThinN].modelN = 0;
+        q = line + used;
+        while (sThin[sThinN].modelN < 8 && sscanf(q, "%d%n", &m, &used) == 1) {
+            sThin[sThinN].models[sThin[sThinN].modelN++] = m;
+            q += used;
+        }
+        if (sThin[sThinN].modelN == 0) continue; /* (without its models: never, it would reach other fighters) */
         sThinN++;
     }
     fclose(f);
@@ -1244,10 +1258,15 @@ static void anime_thin_note(uint64_t texName, const uint32_t *px, int n) {
     anime_thin_read();
     for (k = 0; k < sThinN; k++) {
         if (sThin[k].hash == texName) {
-            int id = (int)(px[0] >> 24);
-            if (id < 255 && sThinId[id] != sThin[k].times) {
+            int id = (int)(px[0] >> 24), model, j, ok = 0;
+            if (id >= 0x80) continue; /* (not a fighter's number) */
+            model = sRowModel[id / 15] - 1;
+            for (j = 0; j < sThin[k].modelN; j++) ok |= sThin[k].models[j] == model;
+            if (!ok) continue;
+            if (sThinId[id] != sThin[k].times || sThinModel[id] != model) {
                 sThinId[id] = sThin[k].times;
-                fprintf(stderr, "anime: contorno fino %016llx: objeto %d x%.2f\n", (unsigned long long)texName, id, sThin[k].times);
+                sThinModel[id] = model;
+                fprintf(stderr, "anime: contorno fino %016llx: objeto %d (modelo %d) x%.2f\n", (unsigned long long)texName, id, model, sThin[k].times);
             }
         }
     }
@@ -4824,7 +4843,7 @@ void GsDraw_OutlineCaps(float caps[16]) {
             caps[id + 1] = 1.0f;
         }
         for (id = 0; id < 255 && n < 6; id++) {
-            if (sThinId[id] > 0.0f) {
+            if (sThinId[id] > 0.0f && sRowModel[id / 15] - 1 == sThinModel[id]) { /* (tenk23) only while that row has that model */
                 caps[4 + 2 * n] = (float)id;
                 caps[5 + 2 * n] = sThinId[id];
                 n++;
