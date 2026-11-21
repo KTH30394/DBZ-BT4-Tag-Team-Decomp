@@ -8,11 +8,15 @@
 layout(location = 0) in vec2 vUv;
 layout(location = 0) out vec4 outColor;
 layout(set = 2, binding = 0) uniform sampler2D aux; // .r = the GS alpha byte / 255
+#ifndef NO_CAP
+layout(set = 2, binding = 1) uniform sampler2D depthTex; // (tenk26) the target's depth (grows toward the camera)
+#endif
 layout(set = 3, binding = 0) uniform Params {
     vec4 step; // x: the line's width across in uv, y: one PS2 pixel down in uv, z: darkness (0x64 / 255)
 #ifndef NO_CAP
-    vec4 cap[4]; // (Rev24) for each fighter (its row of the alpha table: id / 15), the share of the width it is drawn at
+    vec4 cap[5]; // (Rev24) for each fighter (its row of the alpha table: id / 15), the share of the width it is drawn at
                  // (gs_draw.c GsDraw_OutlineCaps: no wider than the lines inside, anime_lineas.txt); 0 = as it is
+                 // (tenk26) cap[4].xyz: object numbers + 1 whose outline also follows the depth (0 = none), w: the jump's threshold
 #endif
 } p;
 #ifndef NO_CAP
@@ -28,6 +32,42 @@ float thinTimes(vec2 uv) {
     if (id == int(floor(p.cap[3].x + 0.5))) t = p.cap[3].y;
     if (id == int(floor(p.cap[3].z + 0.5))) t = p.cap[3].w;
     return t;
+}
+// (tenk26, 21-nov-2026) Inside ONE object (Vegeta SSJ destroyed: his whole hair one texture, one palette, one number) the
+// line between a lock and the one behind it: where the depth jumps between two pixels of the same number, more than the
+// surface's own slope would give, the nearer one is the edge of the lock in front. Only for the numbers in cap[4]
+// (gs_draw.c anime_contorno_profundidad.txt, with their models): every other piece as before.
+int rawId(vec2 uv) { return int(texture(aux, uv).r * 255.0 + 0.5); }
+bool depthPiece(int id) {
+    return id + 1 == int(floor(p.cap[4].x + 0.5)) || id + 1 == int(floor(p.cap[4].y + 0.5)) || id + 1 == int(floor(p.cap[4].z + 0.5));
+}
+// a jump from a (nearer) to b (one pixel further along d), a's slope measured on the pixel before it
+bool depthJump(vec2 a, vec2 d, int id) {
+    vec2 b = a + d;
+    if (rawId(b) != id || rawId(a) != id) return false;
+    float za = texture(depthTex, a).r, zb = texture(depthTex, b).r, zp = texture(depthTex, a - d).r;
+    float slope = abs(za - zp), jump = za - zb; // (the depth grows toward the camera: a nearer means za > zb)
+    float rel = p.cap[4].w > 0.0 ? p.cap[4].w : 0.0015; // (anime_contorno_profundidad.txt 'umbral <v>')
+    return jump > 4.0 * slope + rel * za + 1e-6;
+}
+// coverage of this pixel by such a line W pixels wide, drawn on the nearer side of the jump
+float depthLine(vec2 uv, vec2 tx, vec2 ty, float W) {
+    int id = rawId(uv);
+    if (id == 255 || !depthPiece(id)) return 0.0;
+    float cov = 0.0;
+    vec2 dirs[4] = vec2[4](tx, -tx, ty, -ty);
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 3; j++) {
+            if (float(j) > W) break;
+            vec2 a = uv + float(j) * dirs[i];
+            if (rawId(a) != id) break;
+            if (depthJump(a, dirs[i], id)) {
+                cov = max(cov, clamp(W - float(j), 0.0, 1.0));
+                break;
+            }
+        }
+    }
+    return cov;
 }
 #endif
 float table(vec2 uv) {
@@ -77,7 +117,9 @@ void main() {
     float hi = max(max(max(l, r), max(u, dn)), max(max(ul, ur), max(dl, dr)));
     bool inner = here > 0.0 && (edge || ul < here || ur < here || dl < here || dr < here ||
                  table(vUv + 2.0 * txv) < here || table(vUv - 2.0 * txv) < here || table(vUv + 2.0 * ty) < here || table(vUv - 2.0 * ty) < here);
-    if (!inner && hi <= here && p.step.w == 0.0) {
+    // (tenk26) inside a piece whose outline follows the depth: a line where a lock is in front of another
+    float dline = p.cap[0].x > 0.0 ? depthLine(vUv, txv, ty, p.cap[0].x) : 0.0;
+    if (!inner && hi <= here && p.step.w == 0.0 && dline <= 0.0) {
         discard; // (nothing larger round it, nor smaller: no edge near; most of the picture)
     }
     if (p.cap[0].x > 0.0 && p.step.w == 0.0) {
@@ -115,6 +157,7 @@ void main() {
             float s = -(2.5 - 5.0 * (larger / 25.0));
             cov = max(cov, 1.0 - smoothstep(hh - 0.5, hh + 0.5, abs(s - hh)));
         }
+        cov = max(cov, dline); /* (tenk26) */
         if (cov <= 0.0) {
             discard;
         }

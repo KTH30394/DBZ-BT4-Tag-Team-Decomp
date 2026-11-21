@@ -829,7 +829,7 @@ static int gpu_init(const char *driver) {
     }
     {   /* native outline: destination minus source on the colour channels */
         SDL_GPUShader *vs = sFxVs = shader(SHADER_CODE(kFxVert), SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
-        SDL_GPUShader *fs = shader(SHADER_CODE(kOutlineFrag), SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+        SDL_GPUShader *fs = shader(SHADER_CODE(kOutlineFrag), SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 1); /* (tenk26: + the depth) */
         SDL_GPUColorTargetDescription cd;
         SDL_GPUGraphicsPipelineCreateInfo ci;
         SDL_zero(cd);
@@ -1690,9 +1690,9 @@ static void vk_frame_end(void) {
         }
         if (d->native) { /* a native full-screen effect: its own pass on the colour texture alone, reading the alpha copy */
             SDL_GPUColorTargetInfo ft;
-            SDL_GPUTextureSamplerBinding fs;
+            SDL_GPUTextureSamplerBinding fs[2];
             SDL_Rect sc;
-            float params[20] = {0}; /* (Rev24: step, then the outline's cap for each fighter, outline.frag cap[]) */
+            float params[24] = {0}; /* (Rev24: step, then the outline's cap for each fighter, outline.frag cap[]; tenk26: cap[4] the depth lines) */
             if (pass != NULL) {
                 SDL_EndGPURenderPass(pass);
                 pass = NULL;
@@ -1707,9 +1707,12 @@ static void vk_frame_end(void) {
             ft.store_op = SDL_GPU_STOREOP_STORE;
             pass = SDL_BeginGPURenderPass(cmd, &ft, 1, NULL);
             SDL_BindGPUGraphicsPipeline(pass, d->native == 2 ? sKeyPipe : sOutlinePipe);
-            fs.texture = sAuxCopy; /* the ids as copied by the game, not the live alpha (later passes overwrite it) */
-            fs.sampler = sSamplers[6]; /* nearest, clamped */
-            SDL_BindGPUFragmentSamplers(pass, 0, &fs, 1);
+            fs[0].texture = sAuxCopy; /* the ids as copied by the game, not the live alpha (later passes overwrite it) */
+            fs[0].sampler = sSamplers[6]; /* nearest, clamped */
+            /* (tenk26) the target's depth: the outline also follows it inside the pieces of anime_contorno_profundidad.txt */
+            fs[1].texture = sTgDep[d->target];
+            fs[1].sampler = sSamplers[6];
+            SDL_BindGPUFragmentSamplers(pass, 0, fs, d->native == 2 ? 1 : 2);
             extern int Port_PageAspectMilli(void); /* plat_stub.c: the shape of the page shown now */
             params[0] = 1333.333f / (float)Port_PageAspectMilli() / (float)GS_W; /* one PS2 pixel across, as wide as at 4:3 (outline.frag) */
             params[1] = 1.0f / (float)GS_H;
@@ -1721,6 +1724,7 @@ static void vk_frame_end(void) {
                 params[1] *= wide;
                 params[2] = dark / 255.0f;
                 GsDraw_OutlineCaps(&params[4]);
+                GsDraw_OutlineDepthIds(&params[20]); /* (tenk26) */
             }
             params[3] = getenv("BT3_FX_DEBUG") != NULL ? 1.0f : 0.0f;
             SDL_PushGPUFragmentUniformData(cmd, 0, params, sizeof(params));

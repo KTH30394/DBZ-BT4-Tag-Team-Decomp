@@ -190,5 +190,7 @@ void GsDraw_OutlineLook(float *darkness, float *width);
 /* gs_draw.c (Rev24): for each fighter's row of the alpha table (id / 15), the share of the outline's width it is drawn at
    (the lines' cap, anime_lineas.txt, at its distance now); 0 = as it is. outline.frag's cap[]. */
 void GsDraw_OutlineCaps(float caps[16]);
+/* (tenk26) the object numbers whose outline also follows the depth (anime_contorno_profundidad.txt): outline.frag cap[4] */
+void GsDraw_OutlineDepthIds(float out[4]);
 
 #endif

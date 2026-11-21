@@ -1271,6 +1271,75 @@ static void anime_thin_note(uint64_t texName, const uint32_t *px, int n) {
         }
     }
 }
+/* (tenk26, 21-nov-2026) Pieces whose OUTLINE is also drawn where, inside the SAME object, one part is in front of another
+   (Vegeta SSJ destroyed: his hair is one texture with one palette, one object number, so the outline drew no line between
+   its locks; in the normal model the hair has five palettes and each lock group its own number: the user, "las lineas de
+   los mechones en destruido no salen bien ... deberia verse como el pelo de vegeta ssj base"). textures/
+   anime_contorno_profundidad.txt, a line each: <hash16> <model> [<model> ...]. The texture's object number is noted when it
+   is decoded, only while that row of the alpha table has one of the models; outline.frag then also draws a line where the
+   depth jumps inside that number (on the nearer side). Up to 3 numbers at once (cap[4].xyz, number + 1; 0 = none). */
+typedef struct { uint64_t hash; int models[8], modelN; } AnimeDepthLine;
+static AnimeDepthLine sDepthLine[16];
+static int sDepthLineN = -1;
+static int sDepthLineModel[256]; /* the model the number was noted for + 1, 0 = not noted */
+static float sDepthLineRel = 0.0f; /* 'umbral <v>' in the file: the jump (a share of the depth) that makes a line; 0 = outline.frag's 0.0015 */
+static void anime_depthline_read(void) {
+    FILE *f;
+    char line[256];
+    if (sDepthLineN >= 0) return;
+    sDepthLineN = 0;
+    f = fopen("textures/anime_contorno_profundidad.txt", "r");
+    if (f == NULL) return;
+    while (fgets(line, sizeof(line), f) != NULL && sDepthLineN < 16) {
+        char hs[40];
+        int used = 0, m;
+        char *q;
+        if (line[0] == '#') continue;
+        if (sscanf(line, "umbral %f", &sDepthLineRel) == 1) continue;
+        if (sscanf(line, "%39s%n", hs, &used) != 1) continue;
+        sDepthLine[sDepthLineN].hash = anime_name_hash(hs);
+        sDepthLine[sDepthLineN].modelN = 0;
+        q = line + used;
+        while (sDepthLine[sDepthLineN].modelN < 8 && sscanf(q, "%d%n", &m, &used) == 1) {
+            sDepthLine[sDepthLineN].models[sDepthLine[sDepthLineN].modelN++] = m;
+            q += used;
+        }
+        if (sDepthLine[sDepthLineN].modelN == 0) continue; /* (without its models: never, it would reach other fighters) */
+        sDepthLineN++;
+    }
+    fclose(f);
+    fprintf(stderr, "anime: contorno por profundidad: %d piezas, umbral %.4f (anime_contorno_profundidad.txt)\n", sDepthLineN, sDepthLineRel);
+}
+static void anime_depthline_note(uint64_t texName, const uint32_t *px, int n) {
+    int k;
+    if (texName == 0 || px == NULL || n <= 0) return;
+    anime_depthline_read();
+    for (k = 0; k < sDepthLineN; k++) {
+        if (sDepthLine[k].hash == texName) {
+            int id = (int)(px[0] >> 24), model, j, ok = 0;
+            if (id >= 0x80) continue; /* (not a fighter's number) */
+            model = sRowModel[id / 15] - 1;
+            for (j = 0; j < sDepthLine[k].modelN; j++) ok |= sDepthLine[k].models[j] == model;
+            if (!ok) continue;
+            if (sDepthLineModel[id] != model + 1) {
+                sDepthLineModel[id] = model + 1;
+                fprintf(stderr, "anime: contorno por profundidad %016llx: objeto %d (modelo %d)\n", (unsigned long long)texName, id, model);
+            }
+        }
+    }
+}
+/* the numbers for outline.frag cap[4]: x, y, z = number + 1 (0 = none), only while that row has that model */
+void GsDraw_OutlineDepthIds(float out[4]) {
+    int id, n = 0;
+    out[0] = out[1] = out[2] = 0.0f;
+    anime_depthline_read();
+    out[3] = sDepthLineRel;
+    for (id = 0; id < 128 && n < 3; id++) {
+        if (sDepthLineModel[id] > 0 && sRowModel[id / 15] == sDepthLineModel[id]) {
+            out[n++] = (float)(id + 1);
+        }
+    }
+}
 static uint64_t sLinesHash; /* (the file anime_lines_make is working on: anime_lines_get) */
 static int anime_lines_face(int entry);
 /* (Rev31) the width every line inside a piece is drawn at, in PS2 pixels: textures/anime_lineas_grosor.txt, 0.4 */
@@ -3325,6 +3394,7 @@ static GsTex texture_get(int ctx, int menuHd) {
                (int)((px[0] >> 24) / 15) : -1;
     if (texName != 0 && px != NULL && rw == tw && rh == th) {
         anime_thin_note(texName, px, (int)(tw * th)); /* (tenk22) its object number, if its outline is drawn narrower */
+        anime_depthline_note(texName, px, (int)(tw * th)); /* (tenk26) and if its outline also follows the depth */
     }
     gGpuTexNs += gpu_now() - tex_t0;
     gDrawTexNs += gpu_now() - tex_t0;

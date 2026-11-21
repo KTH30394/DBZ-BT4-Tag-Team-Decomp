@@ -1118,7 +1118,7 @@ static void frame_end(void) {
             continue;
         }
         if (d->native) {
-            float params[20] = {0}; /* (Rev24: step, then the outline's cap for each fighter, outline.frag cap[]) */
+            float params[24] = {0}; /* (Rev24: step, then the outline's cap for each fighter, outline.frag cap[]; tenk26: cap[4] = 0, no depth lines here) */
             if (!gsTargets[d->target].cleared) { continue; }
             if (cur != d->target) { bind_target(d->target, 0); cur = d->target; }
             set_native(d->native);
